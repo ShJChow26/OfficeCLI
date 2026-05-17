@@ -1432,7 +1432,13 @@ internal static partial class ChartHelper
                 case "plotvisonly" or "plotvisibleonly":
                 {
                     chart.RemoveAllChildren<C.PlotVisibleOnly>();
-                    chart.AppendChild(new C.PlotVisibleOnly { Val = ParseHelpers.IsTruthy(value) });
+                    // CONSISTENCY(chart/chartSpace-schema-order): plotVisOnly must
+                    // precede dispBlanksAs/showDLblsOverMax/extLst in CT_Chart.
+                    // AppendChild lands it after dispBlanksAs (emitted by the
+                    // chart builder), which PowerPoint silently honors but
+                    // OpenXmlValidator rejects with 'unexpected child element
+                    // plotVisOnly'.
+                    InsertChartChildInOrder(chart, new C.PlotVisibleOnly { Val = ParseHelpers.IsTruthy(value) });
                     break;
                 }
 

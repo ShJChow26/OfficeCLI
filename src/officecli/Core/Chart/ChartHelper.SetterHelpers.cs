@@ -1001,6 +1001,34 @@ internal static partial class ChartHelper
     }
 
     /// <summary>
+    /// Insert a child into the CT_Chart element at the correct schema position.
+    /// Schema: title?, autoTitleDeleted?, pivotFmts?, view3D?, floor?, sideWall?,
+    /// backWall?, plotArea, legend?, plotVisOnly?, dispBlanksAs?, showDLblsOverMax?, extLst?.
+    /// AppendChild leaves trailing elements (plotVisOnly, dispBlanksAs) in the wrong
+    /// order when applied after siblings already exist; PowerPoint silently honors
+    /// the value, but OpenXmlValidator rejects with 'unexpected child element'.
+    /// </summary>
+    internal static void InsertChartChildInOrder(OpenXmlCompositeElement chart, OpenXmlElement child)
+    {
+        string[] insertBeforeNames = child.LocalName switch
+        {
+            "plotVisOnly" => ["dispBlanksAs", "showDLblsOverMax", "extLst"],
+            "dispBlanksAs" => ["showDLblsOverMax", "extLst"],
+            "showDLblsOverMax" => ["extLst"],
+            _ => ["extLst"]
+        };
+        foreach (var sibling in chart.ChildElements)
+        {
+            if (insertBeforeNames.Contains(sibling.LocalName))
+            {
+                chart.InsertBefore(child, sibling);
+                return;
+            }
+        }
+        chart.AppendChild(child);
+    }
+
+    /// <summary>
     /// Insert effectLst into spPr respecting DrawingML schema: ..., ln, effectLst, effectDag, ...
     /// </summary>
     internal static void InsertEffectListInSpPr(Drawing.ShapeProperties spPr, Drawing.EffectList effectList)
