@@ -284,6 +284,28 @@ internal static class OutputFormatter
             return;
         }
 
+        // Pattern: "<ElementType> <N> not found" without the (total: …) tail —
+        // e.g. "Paragraph 99 not found" raised by Add when the parent index
+        // overshoots without the handler also reporting the total. Before
+        // this the message fell through to the internal_error catch-all even
+        // though semantically the same as the (total:…) variant.
+        var notFoundShortMatch = System.Text.RegularExpressions.Regex.Match(msg, @"^(\w+)\s+(\d+)\s+not found$");
+        if (notFoundShortMatch.Success)
+        {
+            result.Code = "not_found";
+            return;
+        }
+
+        // Pattern: "Path not found: …" — generic path-resolve failure raised
+        // by handlers when an absolute DOM path can't be walked. Surfacing
+        // this as not_found instead of internal_error mirrors how every
+        // other missing-element error is coded.
+        if (msg.StartsWith("Path not found:", StringComparison.Ordinal))
+        {
+            result.Code = "not_found";
+            return;
+        }
+
         // Pattern: "Unknown part: X. Available: ..."
         var unknownPartMatch = System.Text.RegularExpressions.Regex.Match(msg, @"Unknown part: (.+?)\. Available: (.+)");
         if (unknownPartMatch.Success)
