@@ -421,6 +421,30 @@ public partial class PowerPointHandler
                     }
                     break;
 
+                case "underlineColor":
+                case "underlinecolor":
+                case "underline.color":
+                case "font.underline.color":
+                {
+                    // DrawingML: <a:uFill><a:solidFill><a:srgbClr val="…"/></a:solidFill></a:uFill>
+                    // Sits between a:uLn and a:latin in CT_TextCharacterProperties
+                    // (schema order bucket 6 — see DrawingRunPropChildOrder).
+                    // ReorderDrawingRunProperties at the end of this method's
+                    // existing post-set cleanup keeps the element in order.
+                    var ulHex = ParseHelpers.SanitizeColorForOoxml(value).Rgb;
+                    foreach (var run in runs)
+                    {
+                        var rProps = run.RunProperties ?? (run.RunProperties = new Drawing.RunProperties());
+                        rProps.RemoveAllChildren<Drawing.UnderlineFill>();
+                        rProps.RemoveAllChildren<Drawing.UnderlineFillText>();
+                        var uFill = new Drawing.UnderlineFill(
+                            new Drawing.SolidFill(new Drawing.RgbColorModelHex { Val = ulHex }));
+                        rProps.AppendChild(uFill);
+                        ReorderDrawingRunProperties(rProps);
+                    }
+                    break;
+                }
+
                 case "strikethrough" or "strike" or "font.strike" or "font.strikethrough":
                     foreach (var run in runs)
                     {
@@ -1883,6 +1907,25 @@ public partial class PowerPointHandler
                         };
                     }
                     break;
+                case "underlineColor":
+                case "underlinecolor":
+                case "underline.color":
+                case "font.underline.color":
+                {
+                    EnsureTableCellHasRun(cell);
+                    var ulHex = ParseHelpers.SanitizeColorForOoxml(value).Rgb;
+                    foreach (var run in cell.Descendants<Drawing.Run>())
+                    {
+                        var rProps = run.RunProperties ?? (run.RunProperties = new Drawing.RunProperties());
+                        rProps.RemoveAllChildren<Drawing.UnderlineFill>();
+                        rProps.RemoveAllChildren<Drawing.UnderlineFillText>();
+                        var uFill = new Drawing.UnderlineFill(
+                            new Drawing.SolidFill(new Drawing.RgbColorModelHex { Val = ulHex }));
+                        rProps.AppendChild(uFill);
+                        ReorderDrawingRunProperties(rProps);
+                    }
+                    break;
+                }
                 case "strikethrough" or "strike" or "font.strike" or "font.strikethrough":
                     EnsureTableCellHasRun(cell);
                     foreach (var run in cell.Descendants<Drawing.Run>())

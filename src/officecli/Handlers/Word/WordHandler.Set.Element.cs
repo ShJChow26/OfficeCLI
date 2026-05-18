@@ -1061,6 +1061,7 @@ public partial class WordHandler
                     break;
                 }
                 case "size" or "font" or "bold" or "italic" or "color" or "highlight" or "underline" or "strike"
+                  or "underline.color" or "underlinecolor" or "underlineColor" or "font.underline.color"
                   or "font.latin" or "font.ascii" or "font.hansi" or "font.hAnsi"
                   or "font.ea" or "font.eastasia" or "font.eastasian"
                   or "font.cs" or "font.complexscript" or "font.complex"
@@ -1293,6 +1294,9 @@ public partial class WordHandler
                 case "color":
                 case "highlight":
                 case "underline":
+                case "underline.color":
+                case "underlinecolor":
+                case "underlineColor":
                 case "strike":
                     // Apply to all runs in all paragraphs in the cell
                     // CONSISTENCY(run-prop-helper): per-prop OOXML write

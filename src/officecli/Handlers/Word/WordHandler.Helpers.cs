@@ -1500,6 +1500,25 @@ public partial class WordHandler
                 var ulMapped = NormalizeUnderlineValue(value);
                 InsertRunPropInSchemaOrder(props, new Underline { Val = new UnderlineValues(ulMapped) });
                 return true;
+            case "underline.color":
+            case "underlinecolor":
+            case "underlineColor":
+            case "font.underline.color":
+            {
+                // CONSISTENCY(underline-color): Get emits canonical
+                // 'underline.color' (see Navigation.cs L1815 etc.). Set
+                // accepts dotted form plus camelCase aliases. The OOXML
+                // shape is <w:u w:val="…" w:color="RRGGBB"/> — color is an
+                // attribute on the existing Underline element, not a child
+                // element. Preserve any existing val (default single when
+                // user is setting color without prior underline).
+                var existingUl = props.GetFirstChild<Underline>();
+                var ulVal = existingUl?.Val?.Value ?? UnderlineValues.Single;
+                props.RemoveAllChildren<Underline>();
+                var hex = OfficeCli.Core.ParseHelpers.SanitizeColorForOoxml(value).Rgb;
+                InsertRunPropInSchemaOrder(props, new Underline { Val = ulVal, Color = hex });
+                return true;
+            }
             case "strike" or "strikethrough" or "font.strike" or "font.strikethrough":
                 props.RemoveAllChildren<Strike>();
                 if (IsExplicitFalseAddOverride(value))

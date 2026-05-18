@@ -1282,6 +1282,14 @@ public partial class PowerPointHandler
                     _ => run.RunProperties.Underline.InnerText
                 };
             }
+            // CONSISTENCY(underline-color): mirror docx Get vocabulary —
+            // 'underline.color' is the canonical dotted key.
+            var uFill = run.RunProperties.GetFirstChild<Drawing.UnderlineFill>();
+            if (uFill != null)
+            {
+                var uFillColor = ReadColorFromFill(uFill.GetFirstChild<Drawing.SolidFill>());
+                if (uFillColor != null) node.Format["underline.color"] = uFillColor;
+            }
             if (run.RunProperties.Strike?.HasValue == true)
             {
                 // Emit explicit "none" too — mirrors first-run reader above.
