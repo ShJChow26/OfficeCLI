@@ -1499,7 +1499,14 @@ internal static partial class ChartHelper
                 {
                     var plotArea2 = chart.GetFirstChild<C.PlotArea>();
                     if (plotArea2 == null) { unsupported.Add(key); break; }
-                    var expVal = (uint)ParseHelpers.SafeParseInt(value, "explosion");
+                    var expInt = ParseHelpers.SafeParseInt(value, "explosion");
+                    // CT_DLblPercent/CT_UnsignedInt: explosion is non-negative
+                    // and reads as a percentage. >100 is technically legal in
+                    // OOXML but Excel UI caps at 100; clamp to [0,100] so a
+                    // negative cast doesn't underflow to ~4 billion.
+                    if (expInt < 0 || expInt > 100)
+                        throw new ArgumentException($"Invalid explosion '{value}': must be in [0, 100] (percent).");
+                    var expVal = (uint)expInt;
                     foreach (var ser in plotArea2.Descendants<OpenXmlCompositeElement>().Where(e => e.LocalName == "ser"))
                     {
                         ser.RemoveAllChildren<C.Explosion>();
@@ -1816,8 +1823,14 @@ internal static partial class ChartHelper
                     var plotArea2 = chart.GetFirstChild<C.PlotArea>();
                     var pie = plotArea2?.GetFirstChild<C.PieChart>();
                     if (pie == null) { unsupported.Add(key); break; }
+                    var angInt = ParseHelpers.SafeParseInt(value, "firstSliceAngle");
+                    // CT_FirstSliceAng: minInclusive=0, maxInclusive=360.
+                    // Negative input would underflow on the ushort cast and
+                    // write 65000+, which Excel rewrites silently on open.
+                    if (angInt < 0 || angInt > 360)
+                        throw new ArgumentException($"Invalid firstSliceAngle '{value}': must be in [0, 360] (degrees).");
                     pie.RemoveAllChildren<C.FirstSliceAngle>();
-                    pie.AppendChild(new C.FirstSliceAngle { Val = (ushort)ParseHelpers.SafeParseInt(value, "firstSliceAngle") });
+                    pie.AppendChild(new C.FirstSliceAngle { Val = (ushort)angInt });
                     break;
                 }
 
