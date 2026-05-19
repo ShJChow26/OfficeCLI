@@ -131,6 +131,28 @@ internal static partial class ChartHelper
         var autoTitleDeleted = chart.GetFirstChild<C.AutoTitleDeleted>()?.Val?.Value;
         if (autoTitleDeleted == true) node.Format["autoTitleDeleted"] = "true";
 
+        // Reference lines (AddReferenceLine overlays) — emit as a single
+        // chart-level `referenceLine=value:color:label:dash` (or semicolon-
+        // joined list) so dump→replay reconstructs the same overlay.
+        // Without this the lineChart sibling round-tripped as a real data
+        // series and the chartType heuristic that excluded ref-line-only
+        // LineCharts found nothing to emit, so the overlay was lost.
+        {
+            var refLines = ReadReferenceLines(plotArea);
+            if (refLines.Count > 0)
+            {
+                var specs = refLines.Select(r =>
+                {
+                    var v = r.Value.ToString("G",
+                        System.Globalization.CultureInfo.InvariantCulture);
+                    var label = string.IsNullOrEmpty(r.Name) ? "" : r.Name;
+                    var dash = r.Dash;
+                    return $"{v}:{r.Color}:{label}:{dash}";
+                });
+                node.Format["referenceLine"] = string.Join(";", specs);
+            }
+        }
+
         // Title formatting: font, size, color, bold from RunProperties
         if (titleEl != null)
         {
@@ -640,6 +662,12 @@ internal static partial class ChartHelper
                 var serEl = plotArea.Descendants<OpenXmlCompositeElement>()
                     .Where(e => e.LocalName == "ser").ElementAtOrDefault(i);
 
+                // Flag reference-line overlay series so the batch emitter
+                // knows to omit them from `data=...` (the chart-level
+                // `referenceLine=spec` rebuilds them via AddReferenceLine).
+                if (serEl != null && IsReferenceLineSeries(serEl))
+                    seriesNode.Format["refLine"] = "true";
+
                 // Cell reference formulas (for series with NumberReference/StringReference)
                 if (serEl != null)
                 {
@@ -821,6 +849,14 @@ internal static partial class ChartHelper
                 && !(e is C.LineChart lc && IsReferenceLineOnlyChart(lc)));
         if (chartTypeCount > 1) return "combo";
 
+        // The dispatch below picks the first real chart-type child. A
+        // reference-line-only LineChart sibling (added by AddReferenceLine on
+        // an area/bar/column chart) must not steal the dispatch -- otherwise
+        // a chart authored as `type=area` + `referenceLine=60` reports
+        // chartType=line on Get, and dump→replay rebuilds it as a single
+        // lineChart with no areaChart in plotArea.
+        bool IsRefOnly(OpenXmlElement el) => el is C.LineChart lc2 && IsReferenceLineOnlyChart(lc2);
+
         if (plotArea.GetFirstChild<C.BarChart>() is C.BarChart bar)
         {
             var dir = bar.GetFirstChild<C.BarDirection>()?.Val?.Value;
@@ -836,7 +872,7 @@ internal static partial class ChartHelper
             if (grp == "percentStacked") return $"{prefix}_percentStacked";
             return prefix;
         }
-        if (plotArea.GetFirstChild<C.LineChart>() != null) return "line";
+        if (plotArea.Elements<C.LineChart>().FirstOrDefault(lc => !IsRefOnly(lc)) != null) return "line";
         if (plotArea.GetFirstChild<C.PieChart>() != null) return "pie";
         if (plotArea.GetFirstChild<C.OfPieChart>() is C.OfPieChart ofPie)
         {

@@ -49,6 +49,14 @@ public static partial class PptxBatchEmitter
             foreach (var s in fullChart.Children)
             {
                 if (s.Type != "series") continue;
+                // Reference-line overlay series are rebuilt at replay via the
+                // chart-level `referenceLine=value:color:label:dash` prop,
+                // not as a data series. Skip them from data= so the area /
+                // bar / column primary chart isn't padded with a flat 60,60
+                // ghost series at replay.
+                if (s.Format.TryGetValue("refLine", out var rl)
+                    && (rl?.ToString() ?? "").Equals("true", StringComparison.OrdinalIgnoreCase))
+                    continue;
                 if (!s.Format.TryGetValue("name", out var nObj) || nObj == null) continue;
                 if (!s.Format.TryGetValue("values", out var vObj) || vObj == null) continue;
                 var name = nObj.ToString() ?? "";
@@ -126,6 +134,9 @@ public static partial class PptxBatchEmitter
             foreach (var s in fullChart.Children)
             {
                 if (s.Type != "series") continue;
+                if (s.Format.TryGetValue("refLine", out var rlFlag)
+                    && (rlFlag?.ToString() ?? "").Equals("true", StringComparison.OrdinalIgnoreCase))
+                    continue; // ref-line overlay rebuilt via chart-level referenceLine=
                 seriesIdx++;
                 foreach (var key in new[] { "color", "lineWidth", "lineDash",
                     "marker", "markerSize", "smooth", "outlineColor",
