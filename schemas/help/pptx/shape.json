@@ -548,12 +548,12 @@
     },
     "tooltip": {
       "type": "string",
-      "description": "tooltip / screen-tip text for hyperlink.",
+      "description": "tooltip / screen-tip text for hyperlink. Applied together with `link` in a single set/add call; standalone tooltip without link is not supported (no hyperlink relationship to attach to). Set-side may update an existing hyperlink's tooltip in-place without re-supplying link.",
       "add": true,
       "set": true,
       "get": false,
       "examples": [
-        "--prop tooltip=\"click here\""
+        "--prop link=https://example.com --prop tooltip=\"click here\""
       ],
       "readback": "n/a",
       "enforcement": "report"
