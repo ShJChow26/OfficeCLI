@@ -16,6 +16,14 @@ public partial class WordHandler
         Modified = true;
         var unsupported = new List<string>();
 
+        // Revision selector / indexed path → dedicated dispatcher. Handles
+        // `revision`, `revision[@author=X][@type=Y]`, and `/revision[N]` with
+        // a single `--prop revision=accept|reject` action. Routed before the
+        // generic selector-batch branch so the synthetic /revision[N] path
+        // (which has no real DOM target) doesn't trip Query→recursive-Set.
+        if (IsRevisionSelectorPath(path))
+            return SetRevisionsBySelector(path, properties);
+
         // Batch Set: if path looks like a selector (not starting with /), Query → Set each
         if (!string.IsNullOrEmpty(path) && !path.StartsWith("/"))
         {

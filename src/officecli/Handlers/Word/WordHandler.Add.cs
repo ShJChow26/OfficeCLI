@@ -702,20 +702,6 @@ public partial class WordHandler
                     break;
                 }
 
-                // DEPRECATED: replaced in the next commit by
-                // `set <doc> 'revision' --prop revision=accept|reject`.
-                // Kept here temporarily so existing accept/reject test coverage
-                // doesn't go red mid-rename; remove together with the new
-                // selector landing.
-                case "acceptallchanges" or "accept-changes" or "acceptchanges":
-                    if (value.Equals("all", StringComparison.OrdinalIgnoreCase) || IsTruthy(value))
-                        AcceptAllChanges();
-                    break;
-                case "rejectallchanges" or "reject-changes" or "rejectchanges":
-                    if (value.Equals("all", StringComparison.OrdinalIgnoreCase) || IsTruthy(value))
-                        RejectAllChanges();
-                    break;
-
                 default:
                     // Try document settings, section layout, compatibility, and docDefaults
                     var lowerKey = key.ToLowerInvariant();
