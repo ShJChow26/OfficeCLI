@@ -523,6 +523,12 @@ static partial class CommandBuilder
             {
                 if (string.IsNullOrEmpty(item.Path))
                     throw new ArgumentException("'set' command requires 'path' field. Example: {\"command\": \"set\", \"path\": \"/slide[1]\", \"props\": {\"bold\": \"true\"}}");
+                // Match standalone `set` rejection of empty/missing props — a
+                // batch step with no props is a no-op that previously reported
+                // success, hiding caller mistakes (forgotten props field,
+                // misspelled key promoted to root, etc.).
+                if (props.Count == 0)
+                    throw new ArgumentException("'set' command requires 'props' field with at least one key=value. Got empty/missing props.");
                 var path = item.Path;
                 var unsupported = handler.Set(path, props);
                 // Mirror standalone `set` (CommandBuilder.Set.cs): handler.Set

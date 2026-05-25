@@ -97,6 +97,28 @@ internal static class RawXmlHelper
         var xDoc = XDocument.Parse(sourceXml);
         var nsManager = BuildNamespaceManager(xDoc);
 
+        // Validate action before evaluating xpath so an unknown action is
+        // never masked by a no-match xpath. Without this, a typo'd action
+        // combined with a stale xpath would batch-report "OK" while doing
+        // nothing — the user sees no signal that the action name was wrong.
+        var normalizedAction = action.ToLowerInvariant();
+        switch (normalizedAction)
+        {
+            case "append":
+            case "prepend":
+            case "insertbefore":
+            case "before":
+            case "insertafter":
+            case "after":
+            case "replace":
+            case "remove":
+            case "delete":
+            case "setattr":
+                break;
+            default:
+                throw new ArgumentException($"Unknown action: {action}. Supported: append, prepend, insertbefore, insertafter, replace, remove, setattr");
+        }
+
         var nodes = xDoc.XPathSelectElements(xpath, nsManager).ToList();
         if (nodes.Count == 0)
         {
