@@ -626,8 +626,15 @@ internal static class FormulaParser
                         i++;
                         break;
                     }
-                    // Escaped special chars: \{ \} \| → literal text
-                    if (i < input.Length && (input[i] == '{' || input[i] == '}' || input[i] == '|'))
+                    // \| → double vertical bar (‖), distinct from \{ \} which are literal
+                    if (i < input.Length && input[i] == '|')
+                    {
+                        tokens.Add(new Token(TokenType.Command, "Vert"));
+                        i++;
+                        break;
+                    }
+                    // Escaped braces: \{ \} → literal text
+                    if (i < input.Length && (input[i] == '{' || input[i] == '}'))
                     {
                         tokens.Add(new Token(TokenType.Text, input[i].ToString()));
                         i++;
@@ -1792,6 +1799,18 @@ internal static class FormulaParser
         "leftrightarrow" => "↔",
         "Leftrightarrow" => "⇔",
         "rightleftharpoons" => "⇌",
+        "to" => "→",
+        "gets" => "←",
+        "mapsto" => "↦",
+        "iff" => "⟺",
+        "implies" => "⟹",
+        "impliedby" => "⟸",
+        // Logic
+        "land" or "wedge" => "∧",
+        "lor" or "vee" => "∨",
+        "lnot" or "neg" => "¬",
+        "mid" => "∣",
+        "parallel" => "∥",
         // Operators
         "pm" => "±",
         "mp" => "∓",
