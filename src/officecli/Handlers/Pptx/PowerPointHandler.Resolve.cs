@@ -293,20 +293,14 @@ public partial class PowerPointHandler
         var shapeTree = GetSlide(slidePart).CommonSlideData?.ShapeTree
             ?? throw new ArgumentException("Slide has no shape tree");
 
-        // Try numeric index first
+        // A numeric phId is a 1-based DOM ordinal — resolve it the same way
+        // get/query do (GetPlaceholderNode uses placeholders[phIdx-1]). Do NOT
+        // match the OOXML PlaceholderShape.Index attribute here: idx values
+        // collide with ordinals (body idx=1, title idx absent) and the
+        // attribute match shadowed the ordinal, so set /placeholder[1] hit the
+        // body while get /placeholder[1] returned the title (off-by-one).
         if (int.TryParse(phId, out var numIdx))
         {
-            // Match by placeholder index
-            var byIndex = shapeTree.Elements<Shape>()
-                .FirstOrDefault(s =>
-                {
-                    var ph = s.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
-                        ?.GetFirstChild<PlaceholderShape>();
-                    return ph?.Index?.Value == (uint)numIdx;
-                });
-            if (byIndex != null) return byIndex;
-
-            // Also try as 1-based ordinal of all placeholders
             var allPh = shapeTree.Elements<Shape>()
                 .Where(s => s.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
                     ?.GetFirstChild<PlaceholderShape>() != null).ToList();
