@@ -70,7 +70,13 @@ public partial class ExcelHandler
     // no-match or cross-table ambiguity rather than silently picking one.
     private List<DocumentNode> QueryRowsByColumnPredicate(string? sheetFilter, List<AttributeFilter.Condition> colConds)
     {
-        var candidates = new List<(string sheetName, WorksheetPart part, TableDefinitionPart tdp,
+        // A table that owns every referenced column. ListObjects are
+        // authoritative (column names are stored metadata); detected tables are
+        // a header-sniff heuristic (stable=false), so they are only consulted
+        // when no ListObject matches — a real table never loses to a guess.
+        var listObjCands = new List<(string sheetName, WorksheetPart part, string label, string source,
+            int dataR1, int dataR2, Dictionary<string, int> colAbsIndex)>();
+        var detectedCands = new List<(string sheetName, WorksheetPart part, string label, string source,
             int dataR1, int dataR2, Dictionary<string, int> colAbsIndex)>();
 
         foreach (var (sheetName, worksheetPart) in GetWorksheets())
@@ -78,31 +84,42 @@ public partial class ExcelHandler
             if (sheetFilter != null && !sheetName.Equals(sheetFilter, StringComparison.OrdinalIgnoreCase))
                 continue;
 
+            // ListObjects (authoritative column names).
+            var realRanges = new List<(int c1, int r1, int c2, int r2)>();
             foreach (var tdp in worksheetPart.TableDefinitionParts)
             {
                 var tbl = tdp.Table;
                 if (tbl?.Reference?.Value == null) continue;
                 if (!TryParseRange(tbl.Reference.Value, out var rng)) continue;
+                realRanges.Add(rng);
 
                 var colNames = tbl.GetFirstChild<TableColumns>()?.Elements<TableColumn>()
                     .Select(c => c.Name?.Value ?? "").ToList() ?? new List<string>();
-
-                var resolved = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                bool allResolved = true;
-                foreach (var cond in colConds)
-                {
-                    if (!TryResolveTableColumn(cond.Key, colNames, rng.c1, rng.c2, out var absCol))
-                    { allResolved = false; break; }
-                    resolved[cond.Key] = absCol;
-                }
-                if (!allResolved) continue;
+                var resolved = ResolveColumns(colNames, rng.c1, rng.c2, colConds);
+                if (resolved == null) continue;
 
                 bool headerRow = (tbl.HeaderRowCount?.Value ?? 1) != 0;
                 bool totalRow = (tbl.TotalsRowCount?.Value ?? 0) > 0 || (tbl.TotalsRowShown?.Value ?? false);
-                candidates.Add((sheetName, worksheetPart, tdp,
+                listObjCands.Add((sheetName, worksheetPart, tbl.Name?.Value ?? "table", "table",
                     rng.r1 + (headerRow ? 1 : 0), rng.r2 - (totalRow ? 1 : 0), resolved));
             }
+
+            // Detected tables (header-sniff). Header is the first row of ref, no
+            // totals row; data rows are ref minus the header row.
+            foreach (var det in DetectTables(sheetName, worksheetPart, realRanges))
+            {
+                var colNames = (det.Format.TryGetValue("columns", out var cv) ? cv?.ToString() ?? "" : "")
+                    .Split(',').ToList();
+                var refStr = det.Format.TryGetValue("ref", out var rv) ? rv?.ToString() : null;
+                if (!TryParseRange(refStr, out var frng)) continue;
+                var resolved = ResolveColumns(colNames, frng.c1, frng.c2, colConds);
+                if (resolved == null) continue;
+                detectedCands.Add((sheetName, worksheetPart, refStr!, "detected",
+                    frng.r1 + 1, frng.r2, resolved));
+            }
         }
+
+        var candidates = listObjCands.Count > 0 ? listObjCands : detectedCands;
 
         if (candidates.Count == 0)
         {
@@ -110,11 +127,11 @@ public partial class ExcelHandler
             var scope = sheetFilter == null ? "any sheet" : $"sheet '{sheetFilter}'";
             throw new ArgumentException(
                 $"row[col op val] found no table on {scope} with column(s) {cols}. " +
-                "Column predicates resolve header names (or column letters) against a table (ListObject).");
+                "Column predicates resolve header names (or column letters) against a ListObject or a detected (header-row) table.");
         }
         if (candidates.Count > 1)
         {
-            var where = string.Join(", ", candidates.Select(c => $"{c.sheetName}!{c.tdp.Table!.Name?.Value}"));
+            var where = string.Join(", ", candidates.Select(c => $"{c.sheetName}!{c.label}"));
             throw new ArgumentException(
                 $"row[col op val] is ambiguous — column(s) exist in {candidates.Count} tables ({where}). " +
                 "Scope by sheet, e.g. /SheetName/row[...].");
@@ -151,11 +168,31 @@ public partial class ExcelHandler
             // because "Salary" is absent from a plain row node's Format.
             foreach (var cond in colConds)
                 rowNode.Format[cond.Key] = probe.Format[cond.Key];
+            // Trace which table bound the predicate. source=detected flags a
+            // header-sniff (stable=false) match so the caller knows the column
+            // resolution was heuristic, mirroring DetectTables' own stable flag.
+            rowNode.Format["matchedTable"] = cand.label;
+            if (cand.source == "detected") rowNode.Format["tableSource"] = "detected";
             rowNode.ChildCount = sheetData.Elements<Row>()
                 .FirstOrDefault(rw => rw.RowIndex?.Value == (uint)r)?.Elements<Cell>().Count() ?? 0;
             results.Add(rowNode);
         }
         return results;
+    }
+
+    // Resolve every column predicate against a table's columns. Returns a
+    // key→absolute-column-index map, or null if any predicate column is not in
+    // this table (so the table is not a candidate).
+    private static Dictionary<string, int>? ResolveColumns(
+        List<string> colNames, int c1, int c2, List<AttributeFilter.Condition> colConds)
+    {
+        var resolved = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var cond in colConds)
+        {
+            if (!TryResolveTableColumn(cond.Key, colNames, c1, c2, out var absCol)) return null;
+            resolved[cond.Key] = absCol;
+        }
+        return resolved;
     }
 
     // Resolve a predicate key to an ABSOLUTE column index within a table's
