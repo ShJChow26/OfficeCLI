@@ -89,6 +89,23 @@ public partial class PowerPointHandler
     }
 
     /// <summary>
+    /// R48: extract the wrapped <p:pic> from a graphicFrame whose
+    /// <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+    /// hosts a Picture element. Keynote->PPT and Aspose-style exporters emit
+    /// pictures in this legal but rare wrapped form (the canonical idiom is a
+    /// top-level <p:pic> sibling of the shape tree). Returns null when the
+    /// frame is not picture-typed or carries no Picture descendant.
+    /// </summary>
+    private const string PictureUri = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+
+    private static Picture? TryExtractPictureFromGraphicFrame(GraphicFrame gf)
+    {
+        var gd = gf.Descendants<Drawing.GraphicData>().FirstOrDefault(g => g.Uri == PictureUri);
+        if (gd == null) return null;
+        return gd.Descendants<Picture>().FirstOrDefault();
+    }
+
+    /// <summary>
     /// Get the relationship ID from an extended chart GraphicFrame.
     /// After round-trip, the cx:chart element becomes OpenXmlUnknownElement,
     /// so we extract r:id from it directly.

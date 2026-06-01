@@ -106,6 +106,16 @@ public partial class PowerPointHandler
                         chartIdx++;
                         children.Add(ChartToNode(gf, slidePart, slideNum, chartIdx, depth, parentPathPrefix));
                     }
+                    else if (TryExtractPictureFromGraphicFrame(gf) is Picture wrappedPic)
+                    {
+                        // R48: graphicFrame whose <a:graphicData uri="...picture">
+                        // hosts a <p:pic>. Keynote->PPT and Aspose authoring tools
+                        // emit pictures in this legal but rare wrapped form
+                        // (top-level <p:pic> is the common idiom). Without this
+                        // branch the picture is silently dropped on dump.
+                        picIdx++;
+                        children.Add(PictureToNode(wrappedPic, slideNum, picIdx, slidePart, parentPathPrefix));
+                    }
                     break;
                 case Picture pic:
                     picIdx++;
@@ -561,6 +571,14 @@ public partial class PowerPointHandler
                     {
                         chartIdx++;
                         yield return new RenderableYield(gf, parentPath, "chart", chartIdx);
+                    }
+                    else if (TryExtractPictureFromGraphicFrame(gf) is Picture wrappedPic)
+                    {
+                        // R48: graphicFrame-wrapped picture (uri=".../picture") —
+                        // mirror the slide-root walker so HTML preview / svg
+                        // export reach the underlying <p:pic>.
+                        picIdx++;
+                        yield return new RenderableYield(wrappedPic, parentPath, "picture", picIdx);
                     }
                     break;
                 case GroupShape g:
