@@ -56,6 +56,12 @@ public partial class WordHandler
         if (!string.IsNullOrEmpty(path) && !path.StartsWith("/"))
         {
             var targets = Query(path);
+            // Narrow by the shared comparison post-filter so >, <, >=, <= (which
+            // the handler selector drops) match exactly, not over-broadly — the
+            // same fix Excel's selector set uses. applyAll:false leaves = / != to
+            // the handler. Without this, set "run[size>14pt]" sets every run.
+            targets = OfficeCli.Core.AttributeFilter.Apply(
+                targets, OfficeCli.Core.AttributeFilter.Parse(path), applyAll: false);
             if (targets.Count == 0)
                 throw new ArgumentException($"No elements matched selector: {path}");
             LastSelectorSetCount = targets.Count;

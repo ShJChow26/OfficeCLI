@@ -25,6 +25,12 @@ public partial class PowerPointHandler
         {
             var unsupported = new List<string>();
             var targets = Query(path);
+            // Narrow by the shared comparison post-filter so >, <, >=, <= (which
+            // the handler selector drops) match exactly, not over-broadly — the
+            // same fix Excel's selector set uses. applyAll:false leaves = / != to
+            // the handler. Without this, set "shape[width>5cm]" sets every shape.
+            targets = OfficeCli.Core.AttributeFilter.Apply(
+                targets, OfficeCli.Core.AttributeFilter.Parse(path), applyAll: false);
             if (targets.Count == 0)
                 throw new ArgumentException($"No elements matched selector: {path}");
             LastSelectorSetCount = targets.Count;
