@@ -616,6 +616,17 @@ public static partial class PptxBatchEmitter
         // OLE child above.
         EmitOleForSlide(ppt, slideNum, slidePath, items, ctx);
 
+        // Generic <mc:AlternateContent> passthrough — covers AlternateContent
+        // blocks in spTree that don't match any of the specific emitters
+        // above (am3d:model3d in EmitModel3dForSlide, SmartArt in
+        // EmitSmartArtsForSlide, media in EmitMediaForSlide, OLE in
+        // EmitOleForSlide). NodeBuilder's typed walk explicitly skips the
+        // mc:AlternateContent wrapper (Choice + Fallback would otherwise
+        // double-count <p:sp> children), so without this catch-all every
+        // such block is silently dropped on dump→replay — meaningful for
+        // any emerging-feature wrapping the semantic walk doesn't model.
+        EmitGenericAlternateContentForSlide(ppt, slideNum, slidePath, items, ctx);
+
         // Notes body content — stub for PR1. Notes part presence does not
         // surface in the slide subtree's children today (notes live under
         // /slide[N]/notes); PR2 will reach in and emit them.

@@ -279,4 +279,74 @@ public static partial class PptxBatchEmitter
             });
         }
     }
+
+    // Generic <mc:AlternateContent> catch-all. Scans the slide's raw XML for
+    // AlternateContent blocks directly under <p:spTree> that match none of
+    // the specific emitters (am3d:model3d / SmartArt / media / OLE — each
+    // already detects its own marker and emits add-part + raw-set
+    // passthrough). The remaining AlternateContent blocks carry
+    // emerging-feature content the semantic walk doesn't model
+    // (NodeBuilder's EnumerateRenderableElements explicitly skips the
+    // mc:AlternateContent wrapper to avoid double-counting Choice + Fallback
+    // <p:sp> children) — without this catch-all, dump→replay silently drops
+    // them. Replay re-appends the verbatim XML at the same spTree level via
+    // raw-set; the source byte form survives.
+    //
+    // CONSISTENCY(mc-alt-skip-recovery): pairs with NodeBuilder's
+    // mc:AlternateContent skip in EnumerateRenderableElements — the skip
+    // suppresses semantic enumeration, this emitter re-injects the raw block.
+    //
+    // Skip markers carry the specific-handler signal so a deck with
+    // model3d / 3D content goes through EmitModel3dForSlide, not this
+    // catch-all. AmThirdD/SmartArt/Media/OLE markers come from the source
+    // XML directly; matching is a substring scan to avoid a full XML parse.
+    internal static void EmitGenericAlternateContentForSlide(
+        PowerPointHandler ppt, int slideNum, string slidePath,
+        List<BatchItem> items, SlideEmitContext ctx)
+    {
+        string xml;
+        try { xml = ppt.Raw(slidePath); }
+        catch { return; }
+
+        // Bound the scan to spTree contents so transition/timing
+        // AlternateContent (handled by the exotic-content scanner) is
+        // off-limits.
+        var spTreeOpen = xml.IndexOf("<p:spTree", StringComparison.Ordinal);
+        var spTreeClose = xml.LastIndexOf("</p:spTree>", StringComparison.Ordinal);
+        if (spTreeOpen < 0 || spTreeClose <= spTreeOpen) return;
+        var spTreeRegion = xml.Substring(spTreeOpen, spTreeClose - spTreeOpen);
+
+        int cursor = 0;
+        while (true)
+        {
+            var altIdx = spTreeRegion.IndexOf("<mc:AlternateContent", cursor, StringComparison.Ordinal);
+            if (altIdx < 0) break;
+            var altEnd = spTreeRegion.IndexOf("</mc:AlternateContent>", altIdx, StringComparison.Ordinal);
+            if (altEnd < 0) break;
+            altEnd += "</mc:AlternateContent>".Length;
+            var slice = spTreeRegion.Substring(altIdx, altEnd - altIdx);
+            cursor = altEnd;
+
+            // Skip blocks owned by a specific emitter.
+            if (slice.Contains("am3d:", StringComparison.Ordinal)
+                || slice.Contains("Requires=\"am3d\"", StringComparison.Ordinal)
+                || slice.Contains("<dgm:relIds", StringComparison.Ordinal)
+                || slice.Contains("<p:oleObj", StringComparison.Ordinal)
+                || slice.Contains("<p:audio", StringComparison.Ordinal)
+                || slice.Contains("<p:video", StringComparison.Ordinal))
+                continue;
+
+            string canon;
+            try { canon = NormalizeSlideRawSlice(slice); }
+            catch { canon = slice; }
+            items.Add(new BatchItem
+            {
+                Command = "raw-set",
+                Part = slidePath,
+                Xpath = "/p:sld/p:cSld/p:spTree",
+                Action = "append",
+                Xml = canon,
+            });
+        }
+    }
 }
