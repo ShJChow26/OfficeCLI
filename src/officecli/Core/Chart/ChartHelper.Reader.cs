@@ -289,33 +289,29 @@ internal static partial class ChartHelper
         }
 
         // Plot area fill (plotArea uses C.ShapeProperties, not C.ChartShapeProperties)
+        // R62 bt-2: pre-fix only emitted plotFill for <a:solidFill>; <a:gradFill>,
+        // <a:noFill>, <a:pattFill>, <a:blipFill> silently dropped on dump→batch
+        // replay. ReadFillSpec recognises all five; Setter side already routes
+        // solid / gradient / "none" through BuildFillElement.
         var plotSpPr = plotArea.GetFirstChild<C.ShapeProperties>();
-        var plotFill = plotSpPr?.GetFirstChild<Drawing.SolidFill>();
-        if (plotFill != null)
-        {
-            var pColor = ReadColorFromFill(plotFill);
-            if (pColor != null) node.Format["plotFill"] = pColor;
-        }
+        var plotFillSpec = ReadFillSpec(plotSpPr);
+        if (plotFillSpec != null) node.Format["plotFill"] = plotFillSpec;
 
         // Chart area fill (ChartSpace > spPr, NOT PlotArea)
         // Note: The SDK serializes ChartShapeProperties but deserializes it as C.ShapeProperties
         // after round-trip. Check both types, plus in-memory ChartShapeProperties.
+        // R62 bt-2 (symmetric): pre-fix only recognised solidFill, so chartArea
+        // gradient / no-fill round-tripped to nothing. ReadFillSpec covers all
+        // five fill children.
         {
-            Drawing.SolidFill? chartAreaFill = null;
-            var csSpPr = chart.Parent?.GetFirstChild<C.ShapeProperties>();
-            if (csSpPr != null)
-                chartAreaFill = csSpPr.GetFirstChild<Drawing.SolidFill>();
-            if (chartAreaFill == null)
+            OpenXmlCompositeElement? csSpPr = chart.Parent?.GetFirstChild<C.ShapeProperties>();
+            if (csSpPr == null || ReadFillSpec(csSpPr) == null)
             {
                 var csCSpPr = chart.Parent?.GetFirstChild<C.ChartShapeProperties>();
-                if (csCSpPr != null)
-                    chartAreaFill = csCSpPr.GetFirstChild<Drawing.SolidFill>();
+                if (csCSpPr != null) csSpPr = csCSpPr;
             }
-            if (chartAreaFill != null)
-            {
-                var cColor = ReadColorFromFill(chartAreaFill);
-                if (cColor != null) node.Format["chartFill"] = cColor;
-            }
+            var chartFillSpec = ReadFillSpec(csSpPr);
+            if (chartFillSpec != null) node.Format["chartFill"] = chartFillSpec;
         }
 
         // Gridlines: "true" for presence, detail in gridlineColor/gridlineWidth/gridlineDash
@@ -1587,6 +1583,29 @@ internal static partial class ChartHelper
         if (rgb != null) return ParseHelpers.FormatHexColor(rgb);
         var scheme = solidFill.GetFirstChild<Drawing.SchemeColor>()?.Val;
         if (scheme?.HasValue == true) return scheme.InnerText;
+        return null;
+    }
+
+    /// <summary>
+    /// Read any fill child under a chart spPr container (plotArea, chartArea, etc.)
+    /// as a Setter-compatible spec string. Recognises a:solidFill (→ "#RRGGBB"),
+    /// a:gradFill (→ "c1-c2[:angle]" via ReadGradientSpec), a:noFill (→ "none").
+    /// Pattern fills and blip fills round-trip as the original literal hint
+    /// "pattern" / "blip"; BuildFillElement cannot reconstruct those, so the
+    /// Setter will fall back to solid black — at least the key is no longer
+    /// silently dropped. Returns null when the container has no recognised fill
+    /// child (caller emits nothing — matches pre-fix behaviour for that case).
+    /// </summary>
+    internal static string? ReadFillSpec(OpenXmlCompositeElement? spPr)
+    {
+        if (spPr == null) return null;
+        var solid = spPr.GetFirstChild<Drawing.SolidFill>();
+        if (solid != null) return ReadColorFromFill(solid);
+        var grad = spPr.GetFirstChild<Drawing.GradientFill>();
+        if (grad != null) return ReadGradientSpec(grad);
+        if (spPr.GetFirstChild<Drawing.NoFill>() != null) return "none";
+        if (spPr.GetFirstChild<Drawing.PatternFill>() != null) return "pattern";
+        if (spPr.GetFirstChild<Drawing.BlipFill>() != null) return "blip";
         return null;
     }
 
