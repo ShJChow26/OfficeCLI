@@ -2031,10 +2031,16 @@ public partial class PowerPointHandler
     // are meaningless when surfaced as shape-level Format keys. The shape
     // doesn't have a single language or spelling state — it just aggregates
     // first-run properties for convenience. Skip these in shape-level scans.
+    // R58 bt-4: normalizeH (CJK width normalization) is a per-run typography
+    // toggle. The shape-level lift used to fan it out onto the shape Format
+    // bag, so a single-run shape's normalizeH replayed as a shape-level
+    // `add textbox normalizeH=true` and a multi-run shape silently broadcast
+    // the first run's flag to every subsequent run on dump→replay. Filter
+    // it here so it stays on the run where it lives.
     private static readonly System.Collections.Generic.HashSet<string> RunOnlyAttrs =
         new(System.StringComparer.Ordinal)
     {
-        "err", "dirty", "smtClean", "lang",
+        "err", "dirty", "smtClean", "lang", "normalizeH",
     };
 
     private static void FillUnknownRunProps(Drawing.RunProperties? rPr, DocumentNode node, bool shapeLevel = false)
