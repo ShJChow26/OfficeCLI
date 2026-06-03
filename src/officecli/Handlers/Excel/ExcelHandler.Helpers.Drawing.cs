@@ -566,6 +566,13 @@ public partial class ExcelHandler
                 var gRadius = glow.Radius?.HasValue == true ? $"{glow.Radius.Value / EmuConverter.EmuPerPointF:0.##}" : "8";
                 node.Format["glow"] = $"{gColor}-{gRadius}";
             }
+            // softEdge readback — xlsx Add/Set build a:softEdge (Add.Drawings.cs)
+            // but Get omitted it, so the shared shape schema's get:true over-
+            // reported parity. Mirror the pptx emit form ("<radius>pt") so
+            // set softEdge=<value> re-parses its own readback.
+            var softEdge = activeEffects.GetFirstChild<Drawing.SoftEdge>();
+            if (softEdge?.Radius?.HasValue == true)
+                node.Format["softEdge"] = $"{softEdge.Radius.Value / EmuConverter.EmuPerPointF:0.##}pt";
         }
 
         return node;
