@@ -3,7 +3,7 @@
 This demo consists of three files that work together:
 
 - **charts-line.py** — Python script that calls `officecli` commands to generate the workbook. Each chart command is shown as a copyable shell command in the comments.
-- **charts-line.xlsx** — The generated workbook with 8 sheets (1 data + 7 chart sheets, 28 charts total).
+- **charts-line.xlsx** — The generated workbook with 9 sheets (1 data + 8 chart sheets, 32 charts total).
 - **charts-line.md** — This file. Maps each sheet to the features it demonstrates.
 
 ## Regenerate
@@ -122,7 +122,7 @@ officecli add data.xlsx /Sheet --type chart \
 
 ### Sheet: 4-Axis & Gridlines
 
-Four charts demonstrating every axis and gridline configuration.
+Four charts demonstrating every axis and gridline configuration. The first chart also shows the axis sub-element `Set` path, which lets you modify an existing chart's axis after creation.
 
 ```bash
 # Custom axis scaling with axis lines
@@ -131,6 +131,13 @@ officecli add data.xlsx /Sheet --type chart \
   --prop axisMin=80 --prop axisMax=220 \
   --prop majorUnit=20 --prop minorUnit=10 \
   --prop axisLine=C00000:1.5:solid --prop catAxisLine=2E75B6:1.5:solid
+
+# Post-creation axis Set via sub-element path
+officecli set data.xlsx "/4-Axis & Gridlines/chart[1]/axis[@role=value]" \
+  --prop min=80 --prop max=220 \
+  --prop format="#,##0" \
+  --prop majorGridlines=true \
+  --prop labelRotation=0
 
 # Logarithmic scale
 officecli add data.xlsx /Sheet --type chart \
@@ -151,7 +158,7 @@ officecli add data.xlsx /Sheet --type chart \
   --prop marker=star:7:2E75B6
 ```
 
-**Features:** `axisMin`, `axisMax`, `majorUnit`, `minorUnit`, `axisLine`, `catAxisLine`, `logBase` (logarithmic scale), `axisReverse` (flip direction), `dispUnits` (thousands/millions), `majorTickMark`, `minorTickMark`, `marker` (triangle, star)
+**Features:** `axisMin`, `axisMax`, `majorUnit`, `minorUnit`, `axisLine`, `catAxisLine`, `logBase` (logarithmic scale), `axisReverse` (flip direction), `dispUnits` (thousands/millions), `majorTickMark`, `minorTickMark`, `marker` (triangle, star); axis sub-element Set path `axis[@role=value]` with `min`, `max`, `format`, `majorGridlines`, `labelRotation`
 
 ### Sheet: 5-Labels & Legend
 
@@ -256,6 +263,51 @@ officecli add data.xlsx /Sheet --type chart \
 
 **Features:** `dropLines` (vertical drop to axis), `hiLowLines` (high-low connectors), `updownbars` (gapWidth:upColor:downColor), `gapDepth` (3D depth spacing 0-500)
 
+### Sheet: 8-Axis Extras
+
+Four charts demonstrating additional axis behaviour: category-axis crossing point, blank-cell handling, and value-axis position.
+
+```bash
+# crossesAt — value axis crosses category axis at a specific Y value
+officecli add data.xlsx /Sheet --type chart \
+  --prop chartType=line \
+  --prop title="crossesAt — axis baseline at 50" \
+  --prop series1="Score:40,65,55,80,45,90,70" \
+  --prop categories=Jan,Feb,Mar,Apr,May,Jun,Jul \
+  --prop crossesAt=50 \
+  --prop lineWidth=2 --prop marker=circle --prop markerSize=6
+
+# dispBlanksAs=span — connect across null/blank data points
+officecli add data.xlsx /Sheet --type chart \
+  --prop chartType=line \
+  --prop title="dispBlanksAs=span (connect gaps)" \
+  --prop series1="Revenue:100,120,130,150,160" \
+  --prop categories=Jan,Feb,Mar,Apr,May \
+  --prop dispBlanksAs=span \
+  --prop lineWidth=2 --prop marker=circle --prop markerSize=6
+
+# dispBlanksAs=zero + crossesAt=0
+officecli add data.xlsx /Sheet --type chart \
+  --prop chartType=line \
+  --prop title="dispBlanksAs=zero + crossesAt=0" \
+  --prop series1="Revenue:100,120,130,150,160" \
+  --prop categories=Jan,Feb,Mar,Apr,May \
+  --prop dispBlanksAs=zero \
+  --prop crossesAt=0 \
+  --prop lineWidth=2 --prop marker=circle --prop markerSize=6
+
+# crosses=max — value axis appears at the far (right) end of the category axis
+officecli add data.xlsx /Sheet --type chart \
+  --prop chartType=line \
+  --prop title="crosses=max (value axis at far end)" \
+  --prop series1="Index:45,60,52,75,80,68,90" \
+  --prop categories=Mon,Tue,Wed,Thu,Fri,Sat,Sun \
+  --prop crosses=max \
+  --prop lineWidth=2
+```
+
+**Features:** `crossesAt=50` (value axis crosses the category axis at y=50, shifting bars/lines that fall below that value below the midline), `dispBlanksAs=span` (connect across null data points with a straight line), `dispBlanksAs=zero` (render blank cells as zero), `dispBlanksAs=gap` (leave a hole), `crosses=max` (value axis at the far end of the category axis; also: `autoZero`, `min`)
+
 ## Complete Feature Coverage
 
 | Feature | Sheet |
@@ -283,6 +335,8 @@ officecli add data.xlsx /Sheet --type chart \
 | **Line elements:** dropLines, hiLowLines, upDownBars | 7 |
 | **3D:** view3d, gapDepth, style | 3, 7 |
 | **Other:** dataTable, roundedCorners | 2, 3 |
+| **Axis sub-element Set:** axis[@role=value] min/max/format/majorGridlines/labelRotation | 4 |
+| **Axis extras:** crossesAt, crosses (max/autoZero/min), dispBlanksAs (span/zero/gap) | 8 |
 
 ## Inspect the Generated File
 

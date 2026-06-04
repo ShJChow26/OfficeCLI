@@ -3,7 +3,7 @@
 This demo consists of three files that work together:
 
 - **charts-bar.py** — Python script that calls `officecli` commands to generate the workbook. Each chart command is shown as a copyable shell command in the comments.
-- **charts-bar.xlsx** — The generated workbook with 7 sheets (1 data + 6 chart sheets, 24 charts total).
+- **charts-bar.xlsx** — The generated workbook with 8 sheets (1 data + 7 chart sheets, 28 charts total).
 - **charts-bar.md** — This file. Maps each sheet to the features it demonstrates.
 
 ## Regenerate
@@ -213,6 +213,57 @@ officecli add data.xlsx /Sheet --type chart \
 
 **Features:** `referenceLine` (with label), `colorRule` (threshold coloring), `title.glow`, `title.shadow`, `series.shadow`, `errBars=percent:10`, `dataTable=true`
 
+### Sheet: 7-Axis Controls
+
+Four charts demonstrating fine-grained axis behaviour: cross position, category label rotation/offset/skip, stacked-bar series connector lines, and chart-level marker color.
+
+```bash
+# crosses, crossBetween, valAxisVisible
+officecli add charts-bar.xlsx "/7-Axis Controls" --type chart \
+  --prop chartType=bar \
+  --prop title="Axis Cross Controls" \
+  --prop series1="Sales:120,80,-30,150" \
+  --prop categories=Q1,Q2,Q3,Q4 \
+  --prop crosses=autoZero \
+  --prop crossBetween=between \
+  --prop valAxisVisible=true
+
+# labelrotation, labeloffset, ticklabelskip (on a column chart)
+officecli add charts-bar.xlsx "/7-Axis Controls" --type chart \
+  --prop chartType=column \
+  --prop title="Tick-label Rotation, Offset & Skip" \
+  --prop series1="Units:45,30,20,55,40,25,60" \
+  --prop categories=January,February,March,April,May,June,July \
+  --prop labelrotation=45 \
+  --prop labeloffset=100 \
+  --prop ticklabelskip=2
+
+# axisposition, serlines (stacked bar)
+officecli add charts-bar.xlsx "/7-Axis Controls" --type chart \
+  --prop chartType=barStacked \
+  --prop title="Stacked — axisposition + serlines" \
+  --prop series1="Online:55,48,60,70" \
+  --prop series2="Retail:30,40,35,25" \
+  --prop categories=Q1,Q2,Q3,Q4 \
+  --prop colors=4472C4,ED7D31 \
+  --prop axisposition=nextTo \
+  --prop serlines=true
+
+# markercolor — chart-level fan-out to all series markers (line chart)
+officecli add charts-bar.xlsx "/7-Axis Controls" --type chart \
+  --prop chartType=line \
+  --prop title="Line — markercolor" \
+  --prop series1="Sales:120,145,132,160" \
+  --prop series2="Costs:80,95,88,110" \
+  --prop categories=Q1,Q2,Q3,Q4 \
+  --prop colors=4472C4,ED7D31 \
+  --prop marker=circle --prop markerSize=8 \
+  --prop markercolor=FF0000 \
+  --prop lineWidth=2
+```
+
+**Features:** `crosses=autoZero` (value axis crosses category axis at zero; also: `min`, `max`), `crossBetween=between` (bars centred between tick marks vs `midCat`), `valAxisVisible=true/false` (show/hide the value axis), `labelrotation=45` (rotate category tick labels, -90–90 degrees), `labeloffset=100` (category-axis label offset as % of default), `ticklabelskip=2` (draw tick labels every Nth category), `axisposition=nextTo` (tick labels next to axis; also: `high`, `low`), `serlines=true` (series connector lines on stacked bar charts), `markercolor=FF0000` (chart-level marker fill color applied to all series)
+
 ## Feature Coverage
 
 | Feature | Sheet |
@@ -265,6 +316,15 @@ officecli add data.xlsx /Sheet --type chart \
 | `shape=cylinder` | 2 |
 | `errBars` | 6 |
 | `dataTable` | 6 |
+| `crosses` (autoZero/min/max) | 7 |
+| `crossBetween` (between/midCat) | 7 |
+| `valAxisVisible` | 7 |
+| `labelrotation` | 7 |
+| `labeloffset` | 7 |
+| `ticklabelskip` | 7 |
+| `axisposition` (nextTo/high/low) | 7 |
+| `serlines` | 7 |
+| `markercolor` | 7 |
 
 ## Inspect the Generated File
 

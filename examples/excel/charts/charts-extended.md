@@ -3,7 +3,7 @@
 This demo consists of three files that work together:
 
 - **charts-extended.py** — Python script that calls `officecli` commands to generate the workbook. Each chart command is shown as a copyable shell command in the comments.
-- **charts-extended.xlsx** — The generated workbook: 3 sheets, 14 charts, covering every property supported by the cx:chart family (waterfall, funnel, treemap, sunburst, histogram, boxWhisker).
+- **charts-extended.xlsx** — The generated workbook: 5 sheets, 18 charts, covering every property supported by the cx:chart family (waterfall, funnel, treemap, sunburst, histogram, boxWhisker) plus chart-meta properties (anchor, preset, autotitledeleted, plotvisonly).
 - **charts-extended.md** — This file. Maps each sheet to the features it demonstrates.
 
 ## Regenerate
@@ -27,6 +27,7 @@ Every extended-chart-specific knob is exercised by at least one chart:
 | sunburst | (generic styling only) | Sheet 2, Chart 4 |
 | histogram | `binCount`, `binSize`, `intervalClosed` = `r` / `l`, `underflowBin`, `overflowBin` | Sheet 3, Chart 1–4 |
 | boxWhisker | `quartileMethod` = `exclusive` / `inclusive` | Sheet 3, Chart 5–6 |
+| (all types) | `anchor`, `preset`, `autotitledeleted`, `plotvisonly` | Sheet 5, Chart 1–4 |
 
 Generic cx styling exercised across the deck: `title.glow`, `title.shadow`, `title.bold`/`size`/`color`, `dataLabels`, `labelFont`, `legend` position, `legendfont`, `axisfont`, `colors` palette, `chartFill`, `plotFill`.
 
@@ -222,6 +223,53 @@ officecli add charts-extended.xlsx "/4-Pareto" --type chart \
 
 ---
 
+## Sheet: 5-Chart Meta
+
+Four charts demonstrating chart-level meta properties: cell-range anchor placement, named style presets, and display-control flags.
+
+```bash
+# anchor (cell-range placement) + preset=corporate
+officecli add charts-extended.xlsx "/5-Chart Meta" --type chart \
+  --prop chartType=column \
+  --prop title="anchor + preset=corporate" \
+  --prop series1="Revenue:120,145,132,160" \
+  --prop categories=Q1,Q2,Q3,Q4 \
+  --prop anchor="A1:M20" \
+  --prop preset=corporate
+
+# autotitledeleted + plotvisonly
+officecli add charts-extended.xlsx "/5-Chart Meta" --type chart \
+  --prop chartType=bar \
+  --prop series1="Sales:80,95,88,110" \
+  --prop categories=Q1,Q2,Q3,Q4 \
+  --prop x=0 --prop y=22 --prop width=12 --prop height=18 \
+  --prop autotitledeleted=true \
+  --prop plotvisonly=true
+
+# preset=minimal
+officecli add charts-extended.xlsx "/5-Chart Meta" --type chart \
+  --prop chartType=line \
+  --prop title="preset=minimal" \
+  --prop series1="A:10,20,15,25" \
+  --prop series2="B:8,14,12,20" \
+  --prop categories=W1,W2,W3,W4 \
+  --prop x=13 --prop y=0 --prop width=12 --prop height=18 \
+  --prop preset=minimal
+
+# preset=dark
+officecli add charts-extended.xlsx "/5-Chart Meta" --type chart \
+  --prop chartType=column \
+  --prop title="preset=dark" \
+  --prop series1="Sales:45,60,55,80" \
+  --prop categories=Q1,Q2,Q3,Q4 \
+  --prop x=13 --prop y=22 --prop width=12 --prop height=18 \
+  --prop preset=dark
+```
+
+**Features:** `anchor="A1:M20"` (position chart at exact cell-range two-cell anchor instead of `x`/`y`/`width`/`height`), `preset=corporate` (named style bundle — sets colors, fonts, fill, border in one shot; values: `minimal`, `dark`, `corporate`, `magazine`, `dashboard`, `colorful`, `monochrome`), `autotitledeleted=true` (suppress the auto "Chart Title" placeholder that Excel inserts when no `title=` is given), `plotvisonly=true` (skip plotting data in hidden rows/columns — mirrors Excel's "Show data in hidden rows and columns" unchecked)
+
+---
+
 ## Property Reference
 
 | Property | Applies to | Example value | Sheet |
@@ -257,6 +305,10 @@ officecli add charts-extended.xlsx "/4-Pareto" --type chart \
 | `colors` | multi-series cx only (not useful on funnel/treemap/sunburst — see limitations note) | `4472C4,5B9BD5,...` | — |
 | `chartFill` (solid only) | all cx | `F8FAFC` | 1/2 |
 | `plotFill` (solid only) | all cx | `FFFFFF` | 2 |
+| `anchor` | all chart types | `"A1:M20"` | 5 |
+| `preset` | all chart types | `minimal` \| `dark` \| `corporate` \| `magazine` \| `dashboard` \| `colorful` \| `monochrome` | 5 |
+| `autotitledeleted` | all chart types | `true` | 5 |
+| `plotvisonly` | all chart types | `true` | 5 |
 
 ---
 

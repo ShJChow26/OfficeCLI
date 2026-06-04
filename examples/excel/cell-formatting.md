@@ -4,7 +4,7 @@ Exercises the full xlsx `cell` property surface — the single most-used Excel
 element. Three files work together:
 
 - **cell-formatting.py** — Python script that drives `officecli` to build the workbook.
-- **cell-formatting.xlsx** — The generated 5-sheet workbook.
+- **cell-formatting.xlsx** — The generated 6-sheet workbook.
 - **cell-formatting.md** — This file.
 
 ## Regenerate
@@ -112,6 +112,58 @@ officecli set file.xlsx /Data/A13 --prop value="Merged title" --prop merge="A13:
 officecli set file.xlsx /Data/B15 --prop arrayformula="B3*2"                                # dynamic-array spill
 ```
 
+### Sheet6 — Rich-text runs
+
+`runs` is an add-time property (requires `--type cell` and `type=richtext`). Each run is a JSON
+object with `"text"` plus optional font props (`bold`, `italic`, `color`, `size`, `underline`,
+`strike`, `superscript`, `subscript`). `set` does not support rich-text; use `add`.
+
+```bash
+# Bold+red / italic+blue / normal run in one cell
+officecli add file.xlsx /RichText --type cell --prop ref=A3 \
+  --prop type=richtext \
+  --prop 'runs=[{"text":"Bold + Red  ","bold":true,"color":"C00000"},{"text":"Italic + Blue","italic":true,"color":"2E75B6"},{"text":"  Normal"}]'
+
+# Chemical formula with superscript: H₂O
+officecli add file.xlsx /RichText --type cell --prop ref=A5 \
+  --prop type=richtext \
+  --prop 'runs=[{"text":"H","bold":true,"color":"1F4E79","size":18},{"text":"2","superscript":true,"size":10},{"text":"O water formula","color":"1F4E79"}]'
+
+# strike / underline / different size in one cell
+officecli add file.xlsx /RichText --type cell --prop ref=A7 \
+  --prop type=richtext \
+  --prop 'runs=[{"text":"Strike","strike":true},{"text":" | "},{"text":"underline","underline":"single"},{"text":" | "},{"text":"size 14pt","size":14}]'
+```
+
+**Features:** `type=richtext`, `runs` (JSON array of run objects), per-run: `text`, `bold`, `italic`, `color`, `size`, `underline`, `strike`, `superscript`, `subscript`
+
+## Complete Feature Coverage
+
+| Feature | Sheet |
+|---------|-------|
+| `font.name`, `font.size`, `font.bold`, `font.italic`, `font.color` | Sheet1 |
+| `underline=single`, `underline=double` | Sheet1 |
+| `strike=true` | Sheet1 |
+| `superscript=true`, `subscript=true` | Sheet1 |
+| `fill` (hex, named, rgb) | Sheet2 |
+| `alignment.horizontal` (left/center/right) | Sheet2 |
+| `alignment.vertical` (top/center/bottom) | Sheet2 |
+| `alignment.wrapText` | Sheet2 |
+| `alignment.readingOrder` (rtl) | Sheet2 |
+| `alignment.textRotation` (0-255) | Sheet2 |
+| `alignment.indent` | Sheet2 |
+| `alignment.shrinkToFit` | Sheet2 |
+| `border` (shorthand all sides) | Sheet3 |
+| `border.all`, `border.top/bottom/left/right` | Sheet3 |
+| `border.color`, `border.diagonal`, `border.diagonalUp`, `border.diagonalDown`, `border.diagonal.color` | Sheet3 |
+| `numberformat` (thousands, %, currency, date, scientific, accounting) | Sheet4 |
+| `value`, `type=string` | Sheet5 |
+| `formula`, `arrayformula` | Sheet5 |
+| `link`, `tooltip` | Sheet5 |
+| `locked` | Sheet5 |
+| `merge` | Sheet5 |
+| `type=richtext`, `runs` (per-run: bold/italic/color/size/strike/underline/superscript/subscript) | Sheet6 |
+
 ## Set → Get round-trip
 
 The script ends by reading three cells back with `get … --json` and printing the
@@ -125,3 +177,10 @@ canonical keys, proving the values survive the write and normalize on read:
 
 Note the normalization on `get`: colors gain a `#` prefix (`#2E75B6`) and font
 sizes become unit-qualified (`14pt`) — the canonical output forms.
+
+## Inspect the Generated File
+
+```bash
+officecli query cell-formatting.xlsx sheet
+officecli get cell-formatting.xlsx "/RichText/A3"
+```

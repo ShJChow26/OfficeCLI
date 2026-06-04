@@ -3,7 +3,7 @@
 This demo consists of three files that work together:
 
 - **charts-pie.py** — Python script that calls `officecli` commands to generate the workbook. Each chart command is shown as a copyable shell command in the comments.
-- **charts-pie.xlsx** — The generated workbook with 3 sheets (1 default + 2 chart sheets, 8 charts total).
+- **charts-pie.xlsx** — The generated workbook with 3 sheets (3 chart sheets, 12 charts total).
 - **charts-pie.md** — This file. Maps each sheet to the features it demonstrates.
 
 ## Regenerate
@@ -86,6 +86,83 @@ officecli add data.xlsx /Sheet --type chart \
 ```
 
 **Features:** `doughnut`, multi-ring (multiple `series`), `labelPos=center`, `labelFont`, `series.outline`, `series.shadow`, `title.shadow`, `plotFill`, `explosion`, `gradients`
+
+### Sheet: 3-Pie Advanced
+
+Four charts demonstrating advanced pie/doughnut-specific properties: automatic slice coloring, rotation, hole size, leader lines, and title overlay.
+
+```bash
+# Pie — varyColors + firstSliceAngle
+officecli add charts-pie.xlsx "/3-Pie Advanced" --type chart \
+  --prop chartType=pie \
+  --prop title="Pie — varyColors + firstSliceAngle" \
+  --prop series1="Share:40,30,20,10" \
+  --prop categories=Q1,Q2,Q3,Q4 \
+  --prop varyColors=true \
+  --prop firstSliceAngle=45 \
+  --prop dataLabels=true --prop labelPos=bestFit
+
+# Doughnut — holeSize + leaderlines
+officecli add charts-pie.xlsx "/3-Pie Advanced" --type chart \
+  --prop chartType=doughnut \
+  --prop title="Doughnut — holeSize + leaderlines" \
+  --prop series1="Revenue:35,28,22,15" \
+  --prop categories=North,South,East,West \
+  --prop colors=2E75B6,ED7D31,70AD47,FFC000 \
+  --prop holeSize=65 \
+  --prop leaderlines=true \
+  --prop dataLabels=true --prop labelPos=outsideEnd
+
+# Pie — title.overlay (title floats over plot area)
+officecli add charts-pie.xlsx "/3-Pie Advanced" --type chart \
+  --prop chartType=pie \
+  --prop title="Overlaid Title" \
+  --prop title.overlay=true \
+  --prop series1="Mix:50,30,20" \
+  --prop categories=Online,Retail,Partner \
+  --prop colors=4472C4,70AD47,FFC000 \
+  --prop varyColors=false \
+  --prop dataLabels=percent --prop labelPos=center
+
+# Doughnut — holeSize + firstSliceAngle + title.overlay combined
+officecli add charts-pie.xlsx "/3-Pie Advanced" --type chart \
+  --prop chartType=doughnut \
+  --prop title="Doughnut — Combined" \
+  --prop title.overlay=true \
+  --prop series1="Split:45,35,20" \
+  --prop categories=A,B,C \
+  --prop colors=C00000,FFC000,548235 \
+  --prop holeSize=50 \
+  --prop varyColors=false \
+  --prop dataLabels=true --prop labelPos=center \
+  --prop labelFont=12:FFFFFF:true
+```
+
+**Features:** `varyColors=true/false` (each slice gets a distinct theme color automatically), `firstSliceAngle=45` (rotate first slice start angle, 0–360 degrees), `holeSize=65` (% of total radius — larger value = thinner doughnut ring), `leaderlines=true` (connecting lines from outside-end labels to their slices), `title.overlay=true` (title floats over the plot area maximizing chart area)
+
+## Complete Feature Coverage
+
+| Feature | Sheet |
+|---------|-------|
+| `pie`, `pie3d`, `doughnut` | 1, 2 |
+| `explosion` (slice separation %) | 1, 2 |
+| `point{N}.color` (per-slice colors) | 1 |
+| `view3d` (tilt angle on 3D pie) | 1 |
+| `dataLabels`, `labelPos` (outsideEnd/bestFit/center/percent) | 1, 2, 3 |
+| `dataLabels.numFmt` | 2 |
+| `dataLabels.showLeaderLines` | 1 |
+| `leaderlines` | 3 |
+| `labelFont` (size:color:bold) | 1, 2, 3 |
+| `gradients` (per-slice gradient fills) | 1, 2 |
+| `legend`, `legendfont` | 1, 2 |
+| `series.outline` (white slice separator) | 2 |
+| `series.shadow`, `title.shadow` | 2 |
+| `plotFill`, `chartFill`, `roundedCorners` | 1, 2 |
+| `title.font`, `title.size`, `title.color`, `title.bold` | 1, 2 |
+| `varyColors` | 3 |
+| `firstSliceAngle` | 3 |
+| `holeSize` | 3 |
+| `title.overlay` | 3 |
 
 ## Inspect the Generated File
 

@@ -3,7 +3,7 @@
 This demo consists of three files that work together:
 
 - **charts-bubble.py** — Python script that calls `officecli` commands to generate the workbook. Each chart command is shown as a copyable shell command in the comments.
-- **charts-bubble.xlsx** — The generated workbook with 4 sheets (1 default + 3 chart sheets, 12 charts total).
+- **charts-bubble.xlsx** — The generated workbook with 4 sheets (4 chart sheets, 14 charts total).
 - **charts-bubble.md** — This file. Maps each sheet to the features it demonstrates.
 
 ## Regenerate
@@ -110,6 +110,61 @@ officecli add data.xlsx /Sheet --type chart \
 ```
 
 **Features:** `secondaryAxis`, `referenceLine`, `axisMin/Max`, `logBase`, `chartArea.border`, `plotArea.border`, `trendline=linear`
+
+### Sheet: 4-Bubble Series Data
+
+Two charts demonstrating bubble-series-specific data properties: negative bubble rendering and linking bubble sizes to worksheet cell ranges.
+
+```bash
+# shownegbubbles — render bubbles whose size value is negative
+officecli add charts-bubble.xlsx "/4-Bubble Series Data" --type chart \
+  --prop chartType=bubble \
+  --prop title="shownegbubbles — negative sizes visible" \
+  --prop series1="Data:60,30,90" \
+  --prop series2="Neg:40,50,70" \
+  --prop colors=4472C4,C00000 \
+  --prop shownegbubbles=true \
+  --prop bubbleScale=80 \
+  --prop legend=bottom
+
+# series1.bubbleSize — link bubble sizes to worksheet cells
+# First populate size data in cells A1:A3, then reference it:
+officecli add charts-bubble.xlsx "/4-Bubble Series Data" --type cell --prop ref=A1 --prop value=10
+officecli add charts-bubble.xlsx "/4-Bubble Series Data" --type cell --prop ref=A2 --prop value=25
+officecli add charts-bubble.xlsx "/4-Bubble Series Data" --type cell --prop ref=A3 --prop value=40
+officecli add charts-bubble.xlsx "/4-Bubble Series Data" --type chart \
+  --prop chartType=bubble \
+  --prop title="series1.bubbleSize — range ref" \
+  --prop series1="Sizes:80,45,60" \
+  --prop 'series1.bubbleSize=4-Bubble Series Data!$A$1:$A$3' \
+  --prop colors=70AD47 \
+  --prop bubbleScale=100 --prop legend=bottom
+```
+
+**Features:** `shownegbubbles=true` (Excel hides negative-size bubbles by default; set true to reflect and display them), `series1.bubbleSize=<range>` (link bubble sizes to a worksheet cell range so Excel recomputes when source data changes; `bubbleSizeRef` is emitted on `Get` alongside the cached literal values)
+
+## Complete Feature Coverage
+
+| Feature | Sheet |
+|---------|-------|
+| `bubble` chart type | 1, 2, 3, 4 |
+| `catTitle`, `axisTitle` | 1 |
+| `bubbleScale` (50/80/100/120) | 1, 2, 3, 4 |
+| `sizeRepresents=width` | 1 |
+| `dataLabels`, `labelPos=center`, `labelFont` | 1 |
+| `title.font/size/color/bold` | 2 |
+| `legend`, `legendfont` | 1, 2, 3, 4 |
+| ARGB transparency (`80RRGGBB`) | 2 |
+| `gridlines`, `axisfont`, `axisLine` | 2 |
+| `plotFill`, `chartFill` | 2, 3 |
+| `series.shadow` | 2 |
+| `secondaryAxis` | 3 |
+| `referenceLine` | 3 |
+| `axisMin/Max`, `logBase` | 3 |
+| `chartArea.border`, `plotArea.border` | 3 |
+| `trendline=linear` | 3 |
+| `shownegbubbles` | 4 |
+| `series1.bubbleSize` (range ref) | 4 |
 
 ## Inspect the Generated File
 
