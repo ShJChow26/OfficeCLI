@@ -52,9 +52,23 @@ internal static class DrawingColorBuilder
 
         OpenXmlElement colorEl;
         var schemeColor = TryParseSchemeColor(baseColor);
+        var systemColor = TryParseSystemColor(baseColor);
         if (schemeColor.HasValue)
         {
             colorEl = new Drawing.SchemeColor { Val = schemeColor.Value };
+        }
+        else if (systemColor != null)
+        {
+            // <a:sysClr val="window"/> etc. — the gradient/Get readback emits the
+            // bare OOXML sysClr name, which the hex parser rejected ("Invalid
+            // color value: 'window'"). Rebuild a real a:sysClr element with its
+            // conventional lastClr so the value renders even if the consuming
+            // app doesn't resolve the live system color.
+            colorEl = new Drawing.SystemColor
+            {
+                Val = systemColor.Value.val,
+                LastColor = systemColor.Value.lastClr,
+            };
         }
         else
         {
@@ -196,6 +210,30 @@ internal static class DrawingColorBuilder
         var solidFill = new Drawing.SolidFill();
         solidFill.Append(BuildColorElement(colorValue));
         return solidFill;
+    }
+
+    /// <summary>
+    /// Try to parse an OOXML system color name (<c>a:sysClr</c> @val). Returns the
+    /// enum value plus a conventional lastClr hex fallback, or null when the input
+    /// is not a recognised system color. Only the slots that appear in real decks
+    /// (window / windowText, plus the common UI chrome colors) are mapped — the
+    /// full ST_SystemColorVal vocabulary is large but rarely authored.
+    /// </summary>
+    internal static (Drawing.SystemColorValues val, string lastClr)? TryParseSystemColor(string value)
+    {
+        return value.ToLowerInvariant().Trim() switch
+        {
+            "window" => (Drawing.SystemColorValues.Window, "FFFFFF"),
+            "windowtext" => (Drawing.SystemColorValues.WindowText, "000000"),
+            "background" => (Drawing.SystemColorValues.Background, "FFFFFF"),
+            "windowframe" => (Drawing.SystemColorValues.WindowFrame, "000000"),
+            "highlight" => (Drawing.SystemColorValues.Highlight, "0078D7"),
+            "highlighttext" => (Drawing.SystemColorValues.HighlightText, "FFFFFF"),
+            "btnface" => (Drawing.SystemColorValues.ButtonFace, "F0F0F0"),
+            "btntext" => (Drawing.SystemColorValues.ButtonText, "000000"),
+            "graytext" => (Drawing.SystemColorValues.GrayText, "6D6D6D"),
+            _ => null
+        };
     }
 
     /// <summary>
