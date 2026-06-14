@@ -1559,6 +1559,40 @@ public partial class PowerPointHandler : IDocumentHandler
     }
 
     /// <summary>
+    /// ImageParts on a slide whose relationship id is one of <paramref name="relIds"/>.
+    /// Used by PptxBatchEmitter.EmitRawSlideBgSlice so a slide-level
+    /// <c>&lt;p:bg&gt;&lt;p:bgPr&gt;&lt;a:blipFill&gt;&lt;a:blip r:embed="rIdN"&gt;</c>
+    /// (background image) raw-set replays against an ImagePart carrying the
+    /// SAME source rId. The bg slice is emitted verbatim via raw-set, so its
+    /// <c>r:embed="rIdN"</c> only resolves if a matching ImagePart with that
+    /// pinned rId exists on the rebuilt slide. We scope to the bg-referenced
+    /// rIds only — slide pictures already round-trip through the typed
+    /// <c>add picture</c> (fresh rId) path, so re-creating every ImagePart
+    /// here would double-create them. Returns an empty list when the slide
+    /// is out of range or carries none of the requested rIds.
+    /// </summary>
+    internal IReadOnlyList<MasterImageInfo> GetSlideImagePartsByRelId(
+        int slideIdx, IReadOnlyCollection<string> relIds)
+    {
+        var result = new List<MasterImageInfo>();
+        if (relIds.Count == 0) return result;
+        var slideParts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > slideParts.Count) return result;
+        var slide = slideParts[slideIdx - 1];
+        var wanted = new HashSet<string>(relIds, StringComparer.Ordinal);
+        foreach (var img in slide.ImageParts)
+        {
+            var rid = slide.GetIdOfPart(img);
+            if (!wanted.Contains(rid)) continue;
+            using var s = img.GetStream();
+            using var ms = new MemoryStream();
+            s.CopyTo(ms);
+            result.Add(new MasterImageInfo(rid, img.ContentType, Convert.ToBase64String(ms.ToArray())));
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Enumerate <c>r:embed</c> / <c>r:link</c> attribute values referenced by
     /// the source notesSlide XML. Used by PptxBatchEmitter.EmitNotes to detect
     /// rIds that the typed Add/Set surface cannot reproduce (anything not an

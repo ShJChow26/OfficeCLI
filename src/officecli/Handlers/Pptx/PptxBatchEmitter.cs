@@ -676,7 +676,7 @@ public static partial class PptxBatchEmitter
         // optional <p:transition> via prop), an "append on /p:sld" sequence
         // in schema order produces a schema-valid result.
         if (exotic.BgXml != null)
-            EmitRawSlideBgSlice(slidePath, exotic.BgXml, items, ctx);
+            EmitRawSlideBgSlice(ppt, slideNum, slidePath, exotic.BgXml, items, ctx);
         if (exotic.ClrMapOvrXml != null)
             EmitRawSlideSlice(slidePath, "p:clrMapOvr", exotic.ClrMapOvrXml, items, ctx);
         if (exotic.HasExoticTransition && exotic.TransitionXml != null)
@@ -1562,11 +1562,17 @@ public static partial class PptxBatchEmitter
     // <p:cSld> BEFORE <p:spTree>, so the standard append-on-/p:sld helper
     // (which puts the slice at the end of <p:sld>) is the wrong target.
     // Prepend onto /p:sld/p:cSld puts the bg as the first child, matching
-    // the cSld schema (bg → spTree). Image-fill bg carries a r:embed rId
-    // that the freshly-added replay slide has no matching relationship for —
-    // raise a warning so callers know solidFill/gradFill/pattFill round-trip
-    // cleanly but image bg requires a follow-up add-part pass.
-    private static void EmitRawSlideBgSlice(string slidePath, string sliceXml,
+    // the cSld schema (bg → spTree). Image-fill bg carries a
+    // <a:blipFill><a:blip r:embed="rIdN"> that the freshly-added replay
+    // slide has no matching relationship for — Cluster E: mirror the
+    // master/layout add-part image carrier (EmitMasterRawOne /
+    // GetMasterImageParts) and emit one `add-part image` row per bg-referenced
+    // rId BEFORE the bg raw-set, pinning the SOURCE rId so the verbatim
+    // r:embed resolves on replay instead of dangling (broken-link background).
+    // solidFill/gradFill/pattFill backgrounds carry no r:embed and round-trip
+    // through the raw-set alone.
+    private static void EmitRawSlideBgSlice(PowerPointHandler ppt, int slideNum,
+                                            string slidePath, string sliceXml,
                                             List<BatchItem> items, SlideEmitContext ctx)
     {
         string canon;
@@ -1587,12 +1593,44 @@ public static partial class PptxBatchEmitter
                 Reason: "raw slice canonicalised to empty; element dropped"));
             return;
         }
-        if (canon.Contains("r:embed", StringComparison.Ordinal))
+        // Carry the referenced image part(s) so r:embed resolves. Scope to
+        // the rIds the bg slice actually references — slide pictures already
+        // round-trip via the typed `add picture` path (their own fresh rId),
+        // so re-creating every slide ImagePart here would double-create them.
+        var embedRids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (System.Text.RegularExpressions.Match m in
+                 System.Text.RegularExpressions.Regex.Matches(canon, @"r:embed=""([^""]+)"""))
+            embedRids.Add(m.Groups[1].Value);
+        if (embedRids.Count > 0)
         {
-            ctx.Unsupported.Add(new UnsupportedWarning(
-                Element: "p:bg.image_rel",
-                SlidePath: slidePath,
-                Reason: "image-fill background references a slide-rels rId; replay slide has no matching ImagePart and PowerPoint may show a missing-image marker"));
+            try
+            {
+                foreach (var imageInfo in ppt.GetSlideImagePartsByRelId(slideNum, embedRids))
+                {
+                    items.Add(new BatchItem
+                    {
+                        Command = "add-part",
+                        Parent = slidePath,
+                        Type = "image",
+                        Props = new Dictionary<string, string>
+                        {
+                            ["rid"] = imageInfo.RelId,
+                            ["content-type"] = imageInfo.ContentType,
+                            ["data"] = imageInfo.Base64Data,
+                        },
+                    });
+                    embedRids.Remove(imageInfo.RelId);
+                }
+            }
+            catch { /* best-effort — bg raw-set still runs */ }
+
+            // Any bg-referenced rId we could NOT materialise (external link,
+            // missing part) would dangle on replay — keep the honest warning.
+            if (embedRids.Count > 0)
+                ctx.Unsupported.Add(new UnsupportedWarning(
+                    Element: "p:bg.image_rel",
+                    SlidePath: slidePath,
+                    Reason: "image-fill background references a slide-rels rId with no embeddable ImagePart; replay slide may show a missing-image marker"));
         }
         items.Add(new BatchItem
         {
