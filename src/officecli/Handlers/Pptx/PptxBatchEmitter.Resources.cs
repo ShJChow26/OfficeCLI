@@ -55,11 +55,13 @@ public static partial class PptxBatchEmitter
 
     private static void EmitThemeRaw(PowerPointHandler ppt, List<BatchItem> items)
     {
-        // Pptx Raw("/theme") returns the presentation-level theme part (first
-        // master's theme). Multi-master decks have additional theme parts
-        // attached to each master, but the existing Raw/RawSet surface only
-        // addresses the primary one — keep parity until per-master theme
-        // raw-set lands. Skip silently when the source has none.
+        // The blank scaffold shares ONE theme part (/ppt/theme/theme1.xml)
+        // between the presentation and master1 — exactly the source topology for
+        // master1. So raw-set master1's theme content into that existing shared
+        // part here, and let EmitMasterRawOne emit DISTINCT theme parts only for
+        // masters 2..N (which the scaffold doesn't provide). This keeps the
+        // presentation<->master1 theme sharing intact while giving each extra
+        // master its own theme.
         string xml;
         try { xml = ppt.Raw("/theme"); }
         catch { return; }
@@ -136,6 +138,36 @@ public static partial class PptxBatchEmitter
             }
         }
         catch { /* best-effort — master raw replace still runs */ }
+
+        // Emit THIS master's own theme part for masters 2..N (distinct content).
+        // master1's theme is the shared /ppt/theme/theme1.xml that the scaffold
+        // already wires to BOTH the presentation and master1 — EmitThemeRaw
+        // raw-sets master1's content into it, so re-creating it here would break
+        // the presentation<->master1 sharing. Masters 2..N have no scaffold theme,
+        // so without this they collapse onto theme1, losing their own theme
+        // content and producing a deck PowerPoint refuses.
+        if (idx >= 2)
+        {
+            try
+            {
+                var mt = ppt.GetMasterTheme(idx);
+                if (mt is { } mtv)
+                {
+                    items.Add(new BatchItem
+                    {
+                        Command = "add-part",
+                        Parent = $"/slideMaster[{idx}]",
+                        Type = "theme",
+                        Props = new Dictionary<string, string>
+                        {
+                            ["rid"] = mtv.RelId,
+                            ["data"] = mtv.ThemeXml,
+                        },
+                    });
+                }
+            }
+            catch { /* best-effort */ }
+        }
 
         items.Add(new BatchItem
         {

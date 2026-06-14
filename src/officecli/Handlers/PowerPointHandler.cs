@@ -548,13 +548,19 @@ public partial class PowerPointHandler : IDocumentHandler
             );
             newPart.SlideMaster.Save();
 
-            // Every SlideMasterPart must reference a ThemePart. The replay's
-            // raw-set replaces only the master XML, not the package
-            // relationships — without a theme link here the package fails
-            // validation. Share the presentation's primary theme; a richer
-            // multi-theme deck can later raw-set its own theme parts.
-            if (presentationPart.ThemePart != null)
-                newPart.AddPart(presentationPart.ThemePart);
+            // Every SlideMasterPart must reference a ThemePart. Give each grown
+            // master its OWN distinct (placeholder) theme part rather than sharing
+            // the presentation's primary theme: `add-part theme` overwrites it
+            // with the source's per-master theme content, and a later
+            // delete-of-its-own-theme must not orphan a theme another master
+            // shares. Seed minimal valid theme content (replaced on replay when
+            // the deck carries per-master themes).
+            var grownTheme = newPart.AddNewPart<ThemePart>();
+            if (presentationPart.ThemePart?.Theme != null)
+                grownTheme.Theme = (DocumentFormat.OpenXml.Drawing.Theme)presentationPart.ThemePart.Theme.CloneNode(true);
+            else
+                grownTheme.Theme = new DocumentFormat.OpenXml.Drawing.Theme();
+            grownTheme.Theme.Save();
 
             sldMasterIdLst.AppendChild(new SlideMasterId { Id = nextId++, RelationshipId = rId });
         }
@@ -1302,9 +1308,78 @@ public partial class PowerPointHandler : IDocumentHandler
                 return (hlRid, parentPartPath);
             }
 
+            case "theme":
+            {
+                // Attach a DISTINCT theme part to a slideMaster / notesMaster with
+                // a pinned relationship id and the source theme XML. Multi-master
+                // decks give each master its own theme; the blank scaffold +
+                // GrowSlideMasterParts share the presentation's primary theme,
+                // which loses theme2/theme3 content and (worse) makes masters
+                // reference the wrong / a shared theme — PowerPoint refuses such a
+                // deck. This re-creates each master's own theme so the package
+                // matches the source's 1:1 master:theme topology.
+                if (properties == null
+                    || !properties.TryGetValue("data", out var themeXml) || string.IsNullOrEmpty(themeXml))
+                    throw new ArgumentException("add-part theme requires property 'data' (the theme XML)");
+                // The theme is a part relationship of the master, NOT referenced
+                // by r:id anywhere in the master XML body, so the relationship id
+                // need not be pinned — and pinning it risks colliding with the
+                // master's other relationships (images/layouts). Let the SDK
+                // assign a fresh id; only honour an explicit rid when it's free.
+                string? themeRid = properties.TryGetValue("rid", out var trid) && !string.IsNullOrEmpty(trid) ? trid : null;
+
+                OpenXmlPartContainer themeHost;
+                var tmMatch = Regex.Match(parentPartPath, @"^/slideMaster\[(\d+)\]$");
+                if (tmMatch.Success)
+                {
+                    var i = int.Parse(tmMatch.Groups[1].Value);
+                    var parts = presentationPart.SlideMasterParts.ToList();
+                    if (i > parts.Count) { GrowSlideMasterParts(i); parts = presentationPart.SlideMasterParts.ToList(); }
+                    if (i < 1 || i > parts.Count) throw new ArgumentException($"slideMaster index {i} out of range");
+                    themeHost = parts[i - 1];
+                }
+                else if (parentPartPath == "/notesMaster")
+                {
+                    themeHost = presentationPart.NotesMasterPart
+                        ?? throw new ArgumentException("add-part theme: notesMaster part does not exist yet");
+                }
+                else
+                    throw new ArgumentException(
+                        "add-part theme: parent must be /slideMaster[N] or /notesMaster");
+
+                // Remove any existing (shared/placeholder) theme part on this host
+                // so it gets its OWN distinct part rather than pointing at the
+                // primary theme. Then add a fresh ThemePart with the pinned rId.
+                var existingTheme = themeHost switch
+                {
+                    SlideMasterPart smp => (ThemePart?)smp.ThemePart,
+                    NotesMasterPart nmp => nmp.ThemePart,
+                    _ => null,
+                };
+                if (existingTheme != null)
+                    themeHost.DeletePart(existingTheme);
+
+                // Only pin the rId if it's not already taken by another rel on the
+                // host (after deleting the old theme). Otherwise auto-assign.
+                bool ridFree = !string.IsNullOrEmpty(themeRid)
+                    && !themeHost.Parts.Any(p => p.RelationshipId == themeRid)
+                    && !themeHost.ExternalRelationships.Any(r => r.Id == themeRid)
+                    && !themeHost.HyperlinkRelationships.Any(r => r.Id == themeRid);
+                ThemePart newTheme = themeHost switch
+                {
+                    SlideMasterPart smp => ridFree ? smp.AddNewPart<ThemePart>(themeRid!) : smp.AddNewPart<ThemePart>(),
+                    NotesMasterPart nmp => ridFree ? nmp.AddNewPart<ThemePart>(themeRid!) : nmp.AddNewPart<ThemePart>(),
+                    _ => throw new ArgumentException($"add-part theme: unsupported host {themeHost.GetType().Name}"),
+                };
+                using (var ts = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(themeXml)))
+                    newTheme.FeedData(ts);
+                var themeActualRid = themeHost.GetIdOfPart(newTheme);
+                return (themeActualRid, parentPartPath);
+            }
+
             default:
                 throw new ArgumentException(
-                    $"Unknown part type: {partType}. Supported: chart, smartart, video, audio, model3d, ole, image, hyperlink");
+                    $"Unknown part type: {partType}. Supported: chart, smartart, video, audio, model3d, ole, image, hyperlink, theme");
         }
     }
 
@@ -1376,6 +1451,36 @@ public partial class PowerPointHandler : IDocumentHandler
             result.Add(new MasterImageInfo(rid, img.ContentType, Convert.ToBase64String(ms.ToArray())));
         }
         return result;
+    }
+
+    /// <summary>
+    /// A slide master's own ThemePart: its relationship id (as the master XML's
+    /// package wires it) and the theme XML. Multi-master decks attach a DISTINCT
+    /// theme to each master; the rebuild must re-create each one rather than
+    /// sharing the presentation's primary theme (PowerPoint refuses a deck whose
+    /// masters share or mis-reference themes). Returns null when the master has no
+    /// theme part.
+    /// </summary>
+    internal (string RelId, string ThemeXml)? GetMasterTheme(int masterIdx)
+    {
+        var pp = _doc.PresentationPart;
+        if (pp == null) return null;
+        var masters = pp.SlideMasterParts.ToList();
+        if (masterIdx < 1 || masterIdx > masters.Count) return null;
+        var master = masters[masterIdx - 1];
+        var themePart = master.ThemePart;
+        if (themePart?.Theme == null) return null;
+        return (master.GetIdOfPart(themePart), themePart.Theme.OuterXml);
+    }
+
+    /// <summary>The notes master's own ThemePart (rel id + XML), or null.</summary>
+    internal (string RelId, string ThemeXml)? GetNotesMasterTheme()
+    {
+        var pp = _doc.PresentationPart;
+        var nmp = pp?.NotesMasterPart;
+        var themePart = nmp?.ThemePart;
+        if (nmp == null || themePart?.Theme == null) return null;
+        return (nmp.GetIdOfPart(themePart), themePart.Theme.OuterXml);
     }
 
     /// <summary>Same as <see cref="GetMasterImageParts"/> for slideLayouts.</summary>
