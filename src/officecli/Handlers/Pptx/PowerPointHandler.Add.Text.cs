@@ -452,7 +452,13 @@ public partial class PowerPointHandler
     /// </summary>
     private string AddLineBreak(string parentPath, int? index, Dictionary<string, string> properties)
     {
-        var brParaMatch = Regex.Match(parentPath, @"^/slide\[(\d+)\]/shape\[(\d+)\](?:/(?:paragraph|p)\[(\d+)\])?$");
+        // CONSISTENCY(pptx-group-flatten): accept an optional /group[G]/.../group[M]
+        // chain between the slide and the shape so a line break can be added to a
+        // textbox sitting inside a group — exactly mirroring AddRun / AddParagraph,
+        // which already walk the same chain. Without it, dump→replay of an <a:br>
+        // inside a grouped shape reported "Line breaks must be added to a
+        // shape/placeholder or paragraph" even though Get exposed the path verbatim.
+        var brParaMatch = Regex.Match(parentPath, @"^/slide\[(\d+)\]((?:/group\[\d+\])*)/shape\[(\d+)\](?:/(?:paragraph|p)\[(\d+)\])?$");
         var brPhMatch = brParaMatch.Success ? null : Regex.Match(parentPath, @"^/slide\[(\d+)\]/placeholder\[(\w+)\](?:/(?:paragraph|p)\[(\d+)\])?$");
         if (!brParaMatch.Success && (brPhMatch == null || !brPhMatch.Success))
             throw new ArgumentException(
@@ -461,12 +467,40 @@ public partial class PowerPointHandler
 
         Shape brShape;
         System.Text.RegularExpressions.Group brParaGroup;
+        string brReturnPathHead;
         if (brParaMatch.Success)
         {
             var slideIdx = int.Parse(brParaMatch.Groups[1].Value);
-            var shapeIdx = int.Parse(brParaMatch.Groups[2].Value);
-            (_, brShape) = ResolveShape(slideIdx, shapeIdx);
-            brParaGroup = brParaMatch.Groups[3];
+            var grpChain = brParaMatch.Groups[2].Value;
+            var shapeIdx = int.Parse(brParaMatch.Groups[3].Value);
+            if (string.IsNullOrEmpty(grpChain))
+            {
+                (_, brShape) = ResolveShape(slideIdx, shapeIdx);
+            }
+            else
+            {
+                // Walk the /group[N]/.../group[M]/shape[K] chain, filtering each
+                // scope to content elements — same resolution AddRun uses.
+                var sps = GetSlideParts().ToList();
+                if (slideIdx < 1 || slideIdx > sps.Count)
+                    throw new ArgumentException($"Slide {slideIdx} not found (total: {sps.Count})");
+                OpenXmlCompositeElement scope = GetSlide(sps[slideIdx - 1]).CommonSlideData?.ShapeTree
+                    ?? throw new ArgumentException($"Slide {slideIdx} has no shapes");
+                foreach (Match gm in Regex.Matches(grpChain, @"/group\[(\d+)\]"))
+                {
+                    var gIdx = int.Parse(gm.Groups[1].Value);
+                    var groupsHere = scope.Elements<GroupShape>().ToList();
+                    if (gIdx < 1 || gIdx > groupsHere.Count)
+                        throw new ArgumentException($"Group {gIdx} not found in scope (have {groupsHere.Count})");
+                    scope = groupsHere[gIdx - 1];
+                }
+                var shapesInScope = scope.Elements<Shape>().ToList();
+                if (shapeIdx < 1 || shapeIdx > shapesInScope.Count)
+                    throw new ArgumentException($"Shape {shapeIdx} not found in group scope (have {shapesInScope.Count})");
+                brShape = shapesInScope[shapeIdx - 1];
+            }
+            brParaGroup = brParaMatch.Groups[4];
+            brReturnPathHead = $"/slide[{slideIdx}]{grpChain}/shape[{shapeIdx}]";
         }
         else
         {
@@ -477,6 +511,7 @@ public partial class PowerPointHandler
                 throw new ArgumentException($"Slide {slideIdx} not found (total: {slideParts.Count})");
             brShape = ResolvePlaceholderShape(slideParts[slideIdx - 1], phToken);
             brParaGroup = brPhMatch.Groups[3];
+            brReturnPathHead = $"/slide[{slideIdx}]/placeholder[{phToken}]";
         }
 
         var brTextBody = brShape.TextBody
@@ -527,11 +562,7 @@ public partial class PowerPointHandler
         }
 
         var brIdx = targetPara.Elements<Drawing.Break>().ToList().FindIndex(b => ReferenceEquals(b, br)) + 1;
-        return $"/slide[{(brParaMatch.Success ? brParaMatch.Groups[1].Value : brPhMatch!.Groups[1].Value)}]" +
-               (brParaMatch.Success
-                    ? $"/shape[{brParaMatch.Groups[2].Value}]"
-                    : $"/placeholder[{brPhMatch!.Groups[2].Value}]") +
-               $"/paragraph[{targetParaIdx}]/br[{brIdx}]";
+        return $"{brReturnPathHead}/paragraph[{targetParaIdx}]/br[{brIdx}]";
     }
 
     private string AddRun(string parentPath, int? index, Dictionary<string, string> properties)
