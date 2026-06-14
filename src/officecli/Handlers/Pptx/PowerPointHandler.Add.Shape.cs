@@ -327,6 +327,32 @@ public partial class PowerPointHandler
                         ApplyTextMargin(bodyPr, marginVal);
                 }
 
+                // Verbatim shape-level <a:lstStyle> re-injection. The default
+                // txBody carries an empty <a:lstStyle/> stub; the source's
+                // per-level lnSpc/defTabSz/algn/fonts live only in the captured
+                // OuterXml (NodeBuilder lstStyleRaw). Replace the stub with the
+                // parsed verbatim element so text reflow off the source metrics
+                // is preserved. CT_TextBody order: bodyPr, lstStyle, p+ — replace
+                // in place keeps lstStyle after bodyPr and before the first p.
+                if (properties.TryGetValue("lstStyleRaw", out var lstStyleRawVal)
+                    && !string.IsNullOrWhiteSpace(lstStyleRawVal)
+                    && newShape.TextBody != null)
+                {
+                    var newLstStyle = new Drawing.ListStyle(lstStyleRawVal);
+                    var existingLstStyle = newShape.TextBody.GetFirstChild<Drawing.ListStyle>();
+                    if (existingLstStyle != null)
+                    {
+                        existingLstStyle.InsertAfterSelf(newLstStyle);
+                        existingLstStyle.Remove();
+                    }
+                    else
+                    {
+                        var anchorBodyPr = newShape.TextBody.GetFirstChild<Drawing.BodyProperties>();
+                        if (anchorBodyPr != null) anchorBodyPr.InsertAfterSelf(newLstStyle);
+                        else newShape.TextBody.InsertAt(newLstStyle, 0);
+                    }
+                }
+
                 // Text alignment (horizontal)
                 if (properties.TryGetValue("align", out var alignVal))
                 {

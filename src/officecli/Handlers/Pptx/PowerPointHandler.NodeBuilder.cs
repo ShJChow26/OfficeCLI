@@ -1831,6 +1831,19 @@ public partial class PowerPointHandler
             else if (bodyPr.GetFirstChild<Drawing.NoAutoFit>() != null) node.Format["autoFit"] = "none";
         }
 
+        // Shape-level txBody <a:lstStyle> with content (lvl1pPr..lvl9pPr:
+        // lnSpc/defTabSz/algn/fonts). The NodeBuilder models per-paragraph
+        // props but never the txBody lstStyle, so rebuild emitted an empty
+        // <a:lstStyle/> and text reflowed off the source's per-level metrics.
+        // Surface the whole element's OuterXml verbatim so AddShape can
+        // re-inject it in CT_TextBody order (after bodyPr, before first p).
+        // Skip empty stubs (<a:lstStyle/>) — they inherit from the cascade
+        // and an empty re-inject is a no-op. CONSISTENCY(lstStyle-raw-passthrough):
+        // mirrors customGeometryXml / effectsRaw verbatim passthrough.
+        var shapeLstStyle = shape.TextBody?.GetFirstChild<Drawing.ListStyle>();
+        if (shapeLstStyle != null && shapeLstStyle.HasChildren)
+            node.Format["lstStyleRaw"] = shapeLstStyle.OuterXml;
+
         // Text alignment (from first paragraph). Only surface when explicitly
         // present in the source XML; the previous else-branch hard-coded
         // align=left whenever pPr/algn was absent, which baked an explicit
