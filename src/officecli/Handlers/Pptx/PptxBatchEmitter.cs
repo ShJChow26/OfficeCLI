@@ -245,12 +245,30 @@ public static partial class PptxBatchEmitter
         try { root = ppt.Get("/"); }
         catch { return; }
         var props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (root.Format.TryGetValue("slideWidth", out var wObj) && wObj is string w
-            && !string.Equals(w, DefaultSlideWidth, StringComparison.OrdinalIgnoreCase))
-            props["slideWidth"] = w;
-        if (root.Format.TryGetValue("slideHeight", out var hObj) && hObj is string h
-            && !string.Equals(h, DefaultSlideHeight, StringComparison.OrdinalIgnoreCase))
-            props["slideHeight"] = h;
+        // Round-trip the slide-size TYPE, not just cx/cy. A named preset
+        // (standard/4:3, widescreen, a4, …) is emitted as slidesize=<preset>,
+        // which sets cx/cy/type atomically — emitting only slideWidth/slideHeight
+        // forces type="custom", and PowerPoint/officeshot render a custom-typed
+        // deck at a different DPI than its screen4x3 source, scaling every page.
+        // Custom-typed decks fall through to slideWidth/slideHeight below.
+        var slideSizeType = root.Format.TryGetValue("slideSize", out var ssObj) ? ssObj as string : null;
+        bool emittedPreset = false;
+        if (!string.IsNullOrEmpty(slideSizeType)
+            && !string.Equals(slideSizeType, "custom", StringComparison.OrdinalIgnoreCase)
+            && OfficeCli.Core.SlideSizeDefaults.Presets.ContainsKey(slideSizeType))
+        {
+            props["slidesize"] = slideSizeType!;
+            emittedPreset = true;
+        }
+        if (!emittedPreset)
+        {
+            if (root.Format.TryGetValue("slideWidth", out var wObj) && wObj is string w
+                && !string.Equals(w, DefaultSlideWidth, StringComparison.OrdinalIgnoreCase))
+                props["slideWidth"] = w;
+            if (root.Format.TryGetValue("slideHeight", out var hObj) && hObj is string h
+                && !string.Equals(h, DefaultSlideHeight, StringComparison.OrdinalIgnoreCase))
+                props["slideHeight"] = h;
+        }
 
         // Presentation attributes / print / show settings — only emit non-default
         // values (Get omits keys that match the OOXML defaults).
