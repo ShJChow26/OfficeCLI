@@ -1598,6 +1598,23 @@ public partial class PowerPointHandler : IDocumentHandler
                 catch (FormatException) { throw new ArgumentException("add-part extpart: 'data' is not valid base64"); }
 
                 OpenXmlPartContainer epHost;
+                // Presentation-level custom binary part (e.g. Google Slides'
+                // ppt/metadata, reached by <go:slidesCustomData r:id="rIdN"> inside
+                // the presentation extLst). The extLst is replayed via raw-set, so
+                // the part + relationship must be re-pinned on the presentation
+                // part or the r:id dangles and PowerPoint refuses the deck.
+                if (parentPartPath == "/presentation")
+                {
+                    epHost = presentationPart;
+                    if (epHost.ExternalRelationships.Any(r => r.Id == epRid)
+                        || epHost.HyperlinkRelationships.Any(r => r.Id == epRid)
+                        || epHost.Parts.Any(p => p.RelationshipId == epRid))
+                        return (epRid, parentPartPath);
+                    var epPresPart = epHost.AddExtendedPart(epRelType, epContentType, epExt, epRid);
+                    using (var epStream = new MemoryStream(epBytes))
+                        epPresPart.FeedData(epStream);
+                    return (epRid, parentPartPath);
+                }
                 var epSmMatch = Regex.Match(parentPartPath, @"^/slideMaster\[(\d+)\]$");
                 var epSlMatch = epSmMatch.Success ? null : Regex.Match(parentPartPath, @"^/slideLayout\[(\d+)\]$");
                 var epSldMatch = (epSmMatch.Success || (epSlMatch?.Success ?? false))
@@ -1627,7 +1644,7 @@ public partial class PowerPointHandler : IDocumentHandler
                 }
                 else
                     throw new ArgumentException(
-                        "add-part extpart: parent must be /slide[N], /slideLayout[N], or /slideMaster[N]");
+                        "add-part extpart: parent must be /presentation, /slide[N], /slideLayout[N], or /slideMaster[N]");
 
                 // External/hyperlink-rel collision: keep the idempotent skip (can't
                 // re-home a non-part relationship). Part collision (scaffold layout
@@ -2084,6 +2101,24 @@ public partial class PowerPointHandler : IDocumentHandler
         var masters = pp.SlideMasterParts.ToList();
         if (masterIdx < 1 || masterIdx > masters.Count) return Array.Empty<BlipCompanionInfo>();
         return ReadExtendedPartInfos(masters[masterIdx - 1]);
+    }
+
+    /// <summary>
+    /// Custom binary ExtendedParts attached directly to the presentation part —
+    /// e.g. Google Slides' ppt/metadata (rel type
+    /// http://customschemas.google.com/relationships/presentationmetadata),
+    /// referenced by <c>&lt;go:slidesCustomData r:id="rIdN"&gt;</c> inside the
+    /// presentation extLst. EmitPresentationExtras replays the extLst verbatim
+    /// via raw-set, so without re-pinning the part the r:id dangled and
+    /// PowerPoint refused the deck. Surfaced as (rId, relType, contentType, ext,
+    /// base64) so the emitter pins each via <c>add-part extpart</c> on
+    /// <c>/presentation</c>. Same shape as <see cref="GetMasterExtendedParts"/>.
+    /// </summary>
+    internal IReadOnlyList<BlipCompanionInfo> GetPresentationExtendedParts()
+    {
+        var pp = _doc.PresentationPart;
+        if (pp == null) return Array.Empty<BlipCompanionInfo>();
+        return ReadExtendedPartInfos(pp);
     }
 
     /// <summary>Same as <see cref="GetMasterExtendedParts"/> for slideLayouts.</summary>

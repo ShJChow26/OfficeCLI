@@ -504,6 +504,34 @@ public static partial class PptxBatchEmitter
         var pNs = System.Xml.Linq.XNamespace.Get(
             "http://schemas.openxmlformats.org/presentationml/2006/main");
 
+        // Custom binary parts attached to the presentation part (e.g. Google
+        // Slides' ppt/metadata, referenced by <go:slidesCustomData r:id="rIdN">
+        // inside the extLst emitted below). The extLst raw-set carries the r:id;
+        // pin the part + its source rId here so the reference resolves instead
+        // of dangling (PowerPoint refuses the deck otherwise). Mirrors the
+        // master/layout extpart carrier.
+        try
+        {
+            foreach (var comp in ppt.GetPresentationExtendedParts())
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "add-part",
+                    Parent = "/presentation",
+                    Type = "extpart",
+                    Props = new Dictionary<string, string>
+                    {
+                        ["rid"] = comp.RelId,
+                        ["rel-type"] = comp.RelType,
+                        ["content-type"] = comp.ContentType,
+                        ["ext"] = comp.TargetExt,
+                        ["data"] = comp.Base64Data,
+                    },
+                });
+            }
+        }
+        catch { /* best-effort */ }
+
         // CT_Presentation child order (ECMA-376 §19.2.1.26) is significant —
         // PowerPoint's strict validator (and replay's OOXML validator) flags
         // any element that appears after a later-schema sibling as an
