@@ -355,7 +355,7 @@ public partial class PowerPointHandler
                             if (effectList == null) effectList = tblPr.AppendChild(new Drawing.EffectList());
                             effectList.RemoveAllChildren<Drawing.OuterShadow>();
                             var shadow = OfficeCli.Core.DrawingEffectsHelper.BuildOuterShadow(value, BuildColorElement);
-                            InsertEffectInOrder(effectList, shadow);
+                            DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, shadow);
                         }
                     }
                     break;
@@ -378,7 +378,7 @@ public partial class PowerPointHandler
                             if (effectList == null) effectList = tblPr.AppendChild(new Drawing.EffectList());
                             effectList.RemoveAllChildren<Drawing.Glow>();
                             var glow = OfficeCli.Core.DrawingEffectsHelper.BuildGlow(value, BuildColorElement);
-                            InsertEffectInOrder(effectList, glow);
+                            DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, glow);
                         }
                     }
                     break;

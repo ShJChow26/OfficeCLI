@@ -1622,7 +1622,7 @@ public partial class PowerPointHandler
                                     shadow.InnerXml = subtreeXml;
                                 }
                             }
-                            InsertEffectInOrder(effectList, shadow);
+                            DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, shadow);
                         }
                         catch
                         {
@@ -1787,7 +1787,7 @@ public partial class PowerPointHandler
                         try
                         {
                             var overlay = BuildFillOverlayFromRaw(value);
-                            InsertEffectInOrder(effectList, overlay);
+                            DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, overlay);
                         }
                         catch
                         {
@@ -1869,7 +1869,7 @@ public partial class PowerPointHandler
                                 if (!string.IsNullOrWhiteSpace(subtreeXml))
                                     shadow.InnerXml = subtreeXml;
                             }
-                            InsertEffectInOrder(effectList, shadow);
+                            DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, shadow);
                         }
                         catch
                         {
@@ -1934,7 +1934,7 @@ public partial class PowerPointHandler
                                 }
                                 xr.MoveToElement();
                             }
-                            InsertEffectInOrder(effectList, refl);
+                            DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, refl);
                         }
                         catch
                         {

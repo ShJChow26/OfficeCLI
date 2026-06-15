@@ -34,7 +34,7 @@ public partial class PowerPointHandler
         if (string.IsNullOrWhiteSpace(value))
             throw new ArgumentException("Shadow value cannot be empty. Use 'none' to remove shadow.");
 
-        InsertEffectInOrder(effectList, BuildOuterShadow(value));
+        DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, BuildOuterShadow(value));
     }
 
     /// <summary>
@@ -56,7 +56,7 @@ public partial class PowerPointHandler
             return;
         }
 
-        InsertEffectInOrder(effectList, BuildGlow(value));
+        DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, BuildGlow(value));
     }
 
     /// <summary>
@@ -93,7 +93,7 @@ public partial class PowerPointHandler
         if (string.IsNullOrWhiteSpace(value))
             throw new ArgumentException("innerShadow value cannot be empty. Use 'none' to remove inner shadow.");
 
-        InsertEffectInOrder(effectList, BuildInnerShadow(value));
+        DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, BuildInnerShadow(value));
     }
 
     private static Drawing.InnerShadow BuildInnerShadow(string value)
@@ -307,7 +307,7 @@ public partial class PowerPointHandler
         if (!string.IsNullOrWhiteSpace(value))
         {
             var overlay = BuildFillOverlayFromRaw(value);
-            InsertEffectInOrder(effectList, overlay);
+            DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, overlay);
         }
         else if (!effectList.HasChildren)
         {
@@ -347,7 +347,7 @@ public partial class PowerPointHandler
             Alignment       = Drawing.RectangleAlignmentValues.BottomLeft,
             RotateWithShape = false
         };
-        InsertEffectInOrder(effectList, reflection);
+        DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, reflection);
     }
 
     /// <summary>
@@ -368,7 +368,7 @@ public partial class PowerPointHandler
         var numStr = value.EndsWith("pt", StringComparison.OrdinalIgnoreCase) ? value[..^2].Trim() : value;
         if (!double.TryParse(numStr, System.Globalization.CultureInfo.InvariantCulture, out var radiusPt) || double.IsNaN(radiusPt) || double.IsInfinity(radiusPt) || radiusPt < 0)
             throw new ArgumentException($"Invalid 'softedge' value '{value}'. Expected a finite non-negative numeric radius in points.");
-        InsertEffectInOrder(effectList, new Drawing.SoftEdge { Radius = (long)(radiusPt * EmuConverter.EmuPerPoint) });
+        DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, new Drawing.SoftEdge { Radius = (long)(radiusPt * EmuConverter.EmuPerPoint) });
     }
 
     /// <summary>
@@ -407,7 +407,7 @@ public partial class PowerPointHandler
             || double.IsNaN(radiusPt) || double.IsInfinity(radiusPt) || radiusPt < 0)
             throw new ArgumentException($"Invalid 'blur' value '{value}'. Expected a finite non-negative numeric radius in points (optionally `<rad>pt:<grow>`).");
 
-        InsertEffectInOrder(effectList, new Drawing.Blur { Radius = (long)(radiusPt * EmuConverter.EmuPerPoint), Grow = grow });
+        DrawingEffectsHelper.InsertEffectInSchemaOrder(effectList, new Drawing.Blur { Radius = (long)(radiusPt * EmuConverter.EmuPerPoint), Grow = grow });
     }
 
     private static void ApplyTextReflection(Drawing.Run run, string value)
@@ -638,41 +638,6 @@ public partial class PowerPointHandler
     }
 
     // --- Helper methods ---
-
-    /// <summary>
-    /// Schema order for CT_EffectList children:
-    /// blur → fillOverlay → glow → innerShdw → outerShdw → prstShdw → reflection → softEdge
-    /// </summary>
-    private static readonly Type[] EffectListChildOrder =
-    [
-        typeof(Drawing.Blur),
-        typeof(Drawing.FillOverlay),
-        typeof(Drawing.Glow),
-        typeof(Drawing.InnerShadow),
-        typeof(Drawing.OuterShadow),
-        typeof(Drawing.PresetShadow),
-        typeof(Drawing.Reflection),
-        typeof(Drawing.SoftEdge),
-    ];
-
-    /// <summary>
-    /// Insert an effect element into EffectList at the correct schema position.
-    /// </summary>
-    private static void InsertEffectInOrder(Drawing.EffectList effectList, DocumentFormat.OpenXml.OpenXmlElement element)
-    {
-        var targetIdx = Array.IndexOf(EffectListChildOrder, element.GetType());
-        // Find the first existing child that should come after this element
-        foreach (var child in effectList.ChildElements)
-        {
-            var childIdx = Array.IndexOf(EffectListChildOrder, child.GetType());
-            if (childIdx > targetIdx)
-            {
-                effectList.InsertBefore(element, child);
-                return;
-            }
-        }
-        effectList.AppendChild(element);
-    }
 
     /// <summary>
     /// Get or create EffectList in correct schema position.
