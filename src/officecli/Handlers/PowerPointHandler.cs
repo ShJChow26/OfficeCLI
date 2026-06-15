@@ -917,7 +917,7 @@ public partial class PowerPointHandler : IDocumentHandler
                     thumbType = thumbCT switch {
                         "image/png" => ImagePartType.Png, "image/jpeg" => ImagePartType.Jpeg,
                         "image/gif" => ImagePartType.Gif, "image/bmp" => ImagePartType.Bmp,
-                        "image/tiff" => ImagePartType.Tiff, _ => ImagePartType.Png };
+                        "image/tiff" or "image/tif" => ImagePartType.Tiff, _ => ImagePartType.Png };
                 }
                 else
                 {
@@ -1030,7 +1030,7 @@ public partial class PowerPointHandler : IDocumentHandler
                     m3dThumbType = m3dThumbCT switch {
                         "image/png" => ImagePartType.Png, "image/jpeg" => ImagePartType.Jpeg,
                         "image/gif" => ImagePartType.Gif, "image/bmp" => ImagePartType.Bmp,
-                        "image/tiff" => ImagePartType.Tiff, _ => ImagePartType.Png };
+                        "image/tiff" or "image/tif" => ImagePartType.Tiff, _ => ImagePartType.Png };
                 }
                 else
                 {
@@ -1178,7 +1178,7 @@ public partial class PowerPointHandler : IDocumentHandler
                     oleThumbType = oleThumbCT switch {
                         "image/png" => ImagePartType.Png, "image/jpeg" => ImagePartType.Jpeg,
                         "image/gif" => ImagePartType.Gif, "image/bmp" => ImagePartType.Bmp,
-                        "image/tiff" => ImagePartType.Tiff,
+                        "image/tiff" or "image/tif" => ImagePartType.Tiff,
                         "image/x-emf" => ImagePartType.Emf, "image/x-wmf" => ImagePartType.Wmf,
                         _ => ImagePartType.Png };
                 }
@@ -1327,7 +1327,7 @@ public partial class PowerPointHandler : IDocumentHandler
                     "image/jpg" => ImagePartType.Jpeg,
                     "image/gif" => ImagePartType.Gif,
                     "image/bmp" => ImagePartType.Bmp,
-                    "image/tiff" => ImagePartType.Tiff,
+                    "image/tiff" or "image/tif" => ImagePartType.Tiff,
                     "image/x-emf" => ImagePartType.Emf,
                     "image/x-wmf" => ImagePartType.Wmf,
                     _ => ImagePartType.Png,
