@@ -295,6 +295,31 @@ public partial class PowerPointHandler
     ///   advanceclick=false  disable click-to-advance
     /// Examples: "fade", "fade-thru-black", "wipe-left", "push-right", "split-horizontal-in", "zoom-out-slow", "none"
     /// </summary>
+    // Standalone transitionSpeed Set: mutate the Speed attribute on the
+    // existing <p:transition>. Mirrors the speed token parsing in
+    // ApplyTransition. If no transition exists yet, create a bare one so the
+    // speed has a host element (matches Get, which reads trans.Speed).
+    private static void ApplyTransitionSpeed(SlidePart slidePart, string value)
+    {
+        var slide = slidePart.Slide ?? throw new InvalidOperationException("Corrupt file");
+        var p = value.Trim().ToLowerInvariant();
+        TransitionSpeedValues speed = p switch
+        {
+            "slow" => TransitionSpeedValues.Slow,
+            "fast" => TransitionSpeedValues.Fast,
+            "medium" or "med" => TransitionSpeedValues.Medium,
+            _ => throw new ArgumentException(
+                $"Invalid transitionSpeed: '{value}'. Expected slow, medium, or fast.")
+        };
+        var trans = slide.Transition;
+        if (trans == null)
+        {
+            trans = new Transition();
+            slide.Transition = trans;
+        }
+        trans.Speed = speed;
+    }
+
     private static void ApplyTransition(SlidePart slidePart, string value)
     {
         var slide = slidePart.Slide ?? throw new InvalidOperationException("Corrupt file");
@@ -2205,11 +2230,48 @@ public partial class PowerPointHandler
                 _ => (string?)null
             };
 
+            // L2 props (repeat / delay / autoReverse) ride the same dash-key
+            // grammar Set accepts ("-repeat=N", "-delay=N", "-autoreverse").
+            // repeat/autoReverse live on the effect cTn; delay lives on the
+            // parent (wrapper) cTn's start condition. Emit only when present so
+            // the common case stays the compact "effect-cls-[dir-]dur" form and
+            // Set→Get round-trips without silent data loss.
+            var l2Suffix = "";
+            var repeatVal = effectCTn.RepeatCount?.Value;
+            if (!string.IsNullOrEmpty(repeatVal) && repeatVal != "1000")
+            {
+                // OOXML repeatCount is 1000ths of a count; "indefinite" passes through.
+                if (repeatVal == "indefinite")
+                    l2Suffix += "-repeat=indefinite";
+                else if (int.TryParse(repeatVal, out var rc))
+                    l2Suffix += $"-repeat={rc / 1000}";
+            }
+            // Delay: nearest ancestor cTn whose start condition carries a
+            // non-zero delay (the wrapper cTn built around the effect).
+            OpenXmlElement? walk = effectCTn.Parent;
+            while (walk != null)
+            {
+                if (walk is CommonTimeNode wctn)
+                {
+                    var delayStr = wctn.StartConditionList?
+                        .Elements<Condition>().FirstOrDefault()?.Delay?.Value;
+                    if (!string.IsNullOrEmpty(delayStr) && delayStr != "0"
+                        && int.TryParse(delayStr, out var dl) && dl > 0)
+                    {
+                        l2Suffix += $"-delay={dl}";
+                        break;
+                    }
+                }
+                walk = walk.Parent;
+            }
+            if (effectCTn.AutoReverse?.Value == true)
+                l2Suffix += "-autoreverse";
+
             animIdx++;
             var key = animIdx == 1 ? "animation" : $"animation{animIdx}";
-            node.Format[key] = dirStr != null
+            node.Format[key] = (dirStr != null
                 ? $"{effectName}-{cls}-{dirStr}-{dur}"
-                : $"{effectName}-{cls}-{dur}";
+                : $"{effectName}-{cls}-{dur}") + l2Suffix;
         }
 
         // Read motion path animations (presetClass="motion" — skipped above, handled separately)

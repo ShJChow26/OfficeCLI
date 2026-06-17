@@ -342,6 +342,9 @@ public partial class PowerPointHandler
                     else
                         AutoUnprefixMorphNames(slidePart2);
                     break;
+                case "transitionspeed":
+                    ApplyTransitionSpeed(slidePart2, value);
+                    break;
                 case "advancetime" or "advanceaftertime":
                     SetAdvanceTime(slide2, value);
                     break;
