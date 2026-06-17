@@ -294,6 +294,15 @@ public partial class PowerPointHandler
 
         // Text margins
         var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+        // R4-2: surface <a:prstTxWarp prst="…"/> (WordArt text warp) as a
+        // data-textwarp attribute + a "text-warp" marker class on the shape div.
+        // CSS cannot faithfully reproduce per-glyph warp paths, but emitting the
+        // preset name makes a warped shape visibly distinct from an unwarped one
+        // in the HTML (and lets downstream tooling/JS apply an SVG textPath).
+        var prstTxWarp = bodyPr?.GetFirstChild<Drawing.PresetTextWarp>();
+        var textWarpAttr = prstTxWarp?.Preset?.HasValue == true
+            ? $" data-textwarp=\"{HtmlEncode(prstTxWarp.Preset.InnerText!)}\""
+            : "";
         long lIns = bodyPr?.LeftInset?.Value ?? 91440;
         long tIns = bodyPr?.TopInset?.Value ?? 45720;
         long rIns = bodyPr?.RightInset?.Value ?? 91440;
@@ -367,6 +376,7 @@ public partial class PowerPointHandler
         var explicitNoAutofit = bodyPr?.GetFirstChild<Drawing.NoAutoFit>() != null;
         var allowOverflow = wrapNone || explicitNoAutofit;
         var shapeClass = hasFillBg && !allowOverflow ? "shape has-fill" : "shape";
+        if (!string.IsNullOrEmpty(textWarpAttr)) shapeClass += " text-warp";
         if (allowOverflow) styles.Add("overflow:visible");
 
         // Open <a> wrapper for shape-level hyperlink (before the shape <div>)
@@ -395,7 +405,7 @@ public partial class PowerPointHandler
             }
             // When wrapped in a link, add cursor:pointer to the shape <div> itself
             if (!string.IsNullOrEmpty(shapeHrefUrl)) outerStyles.Add("cursor:pointer");
-            sb.Append($"    <div class=\"{shapeClass}\"{dataPathAttr} style=\"{string.Join(";", outerStyles)}\">");
+            sb.Append($"    <div class=\"{shapeClass}\"{dataPathAttr}{textWarpAttr} style=\"{string.Join(";", outerStyles)}\">");
             // Fill layer (clipped). Emit even when the shape has no explicit fill
             // background so the clip-path silhouette is still present in the HTML
             // (a snip/clip shape with no fill must still show its clipped outline;
@@ -422,7 +432,7 @@ public partial class PowerPointHandler
         else
         {
             if (!string.IsNullOrEmpty(shapeHrefUrl)) styles.Add("cursor:pointer");
-            sb.Append($"    <div class=\"{shapeClass}\"{dataPathAttr} style=\"{string.Join(";", styles)}\">");
+            sb.Append($"    <div class=\"{shapeClass}\"{dataPathAttr}{textWarpAttr} style=\"{string.Join(";", styles)}\">");
         }
 
         // Text content. `suppressText` is set by RenderInheritedShapes for layout/master
@@ -945,16 +955,23 @@ public partial class PowerPointHandler
         // Extract image data
         var blipFill = pic.BlipFill;
         var blip = blipFill?.GetFirstChild<Drawing.Blip>();
-        if (blip?.Embed?.HasValue == true)
+        // R4-1: prefer the asvg:svgBlip extension's rel-id over the raster
+        // fallback (blip.Embed → 1x1 PNG) so an SVG picture renders its real
+        // vector artwork instead of a blank 1x1 placeholder.
+        var picSvgRelId = blip != null ? OfficeCli.Core.SvgImageHelper.GetSvgRelId(blip) : null;
+        var picEmbedId = !string.IsNullOrEmpty(picSvgRelId) ? picSvgRelId : blip?.Embed?.Value;
+        if (!string.IsNullOrEmpty(picEmbedId))
         {
             try
             {
-                var imgPart = slidePart.GetPartById(blip.Embed.Value!);
+                var imgPart = slidePart.GetPartById(picEmbedId!);
                 using var stream = imgPart.GetStream();
                 using var ms = new MemoryStream();
                 stream.CopyTo(ms);
                 var base64 = Convert.ToBase64String(ms.ToArray());
-                var contentType = SanitizeContentType(imgPart.ContentType ?? "image/png");
+                var contentType = !string.IsNullOrEmpty(picSvgRelId)
+                    ? "image/svg+xml"
+                    : SanitizeContentType(imgPart.ContentType ?? "image/png");
 
                 // Crop — PowerPoint srcRect semantics: select a rectangular region of the
                 // source image, then scale that region to fill the container.
@@ -971,6 +988,12 @@ public partial class PowerPointHandler
                     srcB = (srcRect.Bottom?.Value ?? 0) / 100000.0;
                 }
                 var hasCrop = srcL != 0 || srcT != 0 || srcR != 0 || srcB != 0;
+                // R4-4: a <a:tile> blip fill repeats the image at its native size
+                // rather than stretching it to cover. Emit a repeating background
+                // (background-repeat:repeat; background-size:auto) instead of the
+                // default stretched <img>; previously tile was ignored and the
+                // image rendered stretched-to-fit.
+                var tile = blipFill?.GetFirstChild<Drawing.Tile>();
                 // Degenerate crop: L+R >= 100% or T+B >= 100% means zero/negative
                 // visible area. PowerPoint renders nothing in this case; HTML
                 // preview previously averaged the background-image into a muddy
@@ -979,6 +1002,10 @@ public partial class PowerPointHandler
                 if (degenerateCrop)
                 {
                     // Render nothing — matches PowerPoint's zero-area behavior.
+                }
+                else if (tile != null)
+                {
+                    sb.Append($"<div style=\"width:100%;height:100%;background-image:url(data:{contentType};base64,{base64});background-repeat:repeat;background-size:auto\"></div>");
                 }
                 else if (hasCrop)
                 {
@@ -1130,7 +1157,22 @@ public partial class PowerPointHandler
 
         if (hasHead || hasTail)
         {
-            var arrowSize = Math.Max(3, lineWidth * 3);
+            var baseArrowSize = Math.Max(3, lineWidth * 3);
+            // R4-5: scale the marker by the head/tail @w / @len size enum
+            // (sm/med/lg) so a large arrowhead renders visibly bigger than the
+            // default; previously arrowSize was uniform and ignored @w/@len.
+            // ST_LineEndWidth/Length default is "med" → ×1.0.
+            static double TokenScale(string? s) => s switch { "sm" => 0.6, "lg" => 1.6, _ => 1.0 };
+            static double ArrowSizeScale(OpenXmlElement? end)
+            {
+                if (end == null) return 1.0;
+                var attrs = end.GetAttributes();
+                var w = attrs.FirstOrDefault(a => a.LocalName == "w").Value;
+                var l = attrs.FirstOrDefault(a => a.LocalName == "len").Value;
+                return Math.Max(TokenScale(w), TokenScale(l));
+            }
+            var headArrowSize = baseArrowSize * ArrowSizeScale(headEnd);
+            var tailArrowSize = baseArrowSize * ArrowSizeScale(tailEnd);
             var defs = new StringBuilder();
             defs.Append("<defs>");
             // BUG1(marker-id-collision): marker ids are document-global in HTML even when each
@@ -1146,13 +1188,13 @@ public partial class PowerPointHandler
             if (hasHead)
             {
                 var hid = $"ah{markerSeq}";
-                defs.Append($"<marker id=\"{hid}\" markerWidth=\"{arrowSize:0.#}\" markerHeight=\"{arrowSize:0.#}\" refX=\"{arrowSize:0.#}\" refY=\"{arrowSize / 2:0.#}\" orient=\"auto-start-reverse\">{ArrowMarkerGeometry(headEnd!.Type!.InnerText ?? "triangle", arrowSize, safeColor)}</marker>");
+                defs.Append($"<marker id=\"{hid}\" markerWidth=\"{headArrowSize:0.#}\" markerHeight=\"{headArrowSize:0.#}\" refX=\"{headArrowSize:0.#}\" refY=\"{headArrowSize / 2:0.#}\" orient=\"auto-start-reverse\">{ArrowMarkerGeometry(headEnd!.Type!.InnerText ?? "triangle", headArrowSize, safeColor)}</marker>");
                 markerStartAttr = $" marker-start=\"url(#{hid})\"";
             }
             if (hasTail)
             {
                 var tid = $"at{markerSeq}";
-                defs.Append($"<marker id=\"{tid}\" markerWidth=\"{arrowSize:0.#}\" markerHeight=\"{arrowSize:0.#}\" refX=\"{arrowSize:0.#}\" refY=\"{arrowSize / 2:0.#}\" orient=\"auto\">{ArrowMarkerGeometry(tailEnd!.Type!.InnerText ?? "triangle", arrowSize, safeColor)}</marker>");
+                defs.Append($"<marker id=\"{tid}\" markerWidth=\"{tailArrowSize:0.#}\" markerHeight=\"{tailArrowSize:0.#}\" refX=\"{tailArrowSize:0.#}\" refY=\"{tailArrowSize / 2:0.#}\" orient=\"auto\">{ArrowMarkerGeometry(tailEnd!.Type!.InnerText ?? "triangle", tailArrowSize, safeColor)}</marker>");
                 markerEndAttr = $" marker-end=\"url(#{tid})\"";
             }
             defs.Append("</defs>");

@@ -40,7 +40,12 @@ public partial class PowerPointHandler
         {
             var dataUri = BlipToDataUri(blipFill, part);
             if (dataUri != null)
+            {
+                // R4-4: honor <a:tile> — repeat at native size rather than cover.
+                if (blipFill.GetFirstChild<Drawing.Tile>() != null)
+                    return $"background:url('{dataUri}') repeat;background-size:auto";
                 return $"background:url('{dataUri}') center/cover no-repeat";
+            }
         }
 
         // Pattern fill (a:pattFill) — approximate the preset pattern with a CSS
@@ -985,7 +990,24 @@ public partial class PowerPointHandler
     private static string? BlipToDataUri(Drawing.BlipFill blipFill, OpenXmlPart part)
     {
         var blip = blipFill.GetFirstChild<Drawing.Blip>();
-        if (blip?.Embed?.HasValue != true) return null;
+        if (blip == null) return null;
+        // R4-1: an SVG picture stores BOTH a raster fallback (blip.Embed → 1x1
+        // PNG) AND the real vector via the asvg:svgBlip extension. Prefer the SVG
+        // rel-id so the preview shows the actual artwork, not the 1x1 fallback.
+        var svgRelId = OfficeCli.Core.SvgImageHelper.GetSvgRelId(blip);
+        if (!string.IsNullOrEmpty(svgRelId))
+        {
+            try
+            {
+                var svgPart = part.GetPartById(svgRelId!);
+                using var stream = svgPart.GetStream();
+                using var ms = new MemoryStream();
+                stream.CopyTo(ms);
+                return $"data:image/svg+xml;base64,{Convert.ToBase64String(ms.ToArray())}";
+            }
+            catch { /* unresolved SVG rel — fall back to the raster embed */ }
+        }
+        if (blip.Embed?.HasValue != true) return null;
         return HtmlPreviewHelper.PartToDataUri(part, blip.Embed.Value!);
     }
 

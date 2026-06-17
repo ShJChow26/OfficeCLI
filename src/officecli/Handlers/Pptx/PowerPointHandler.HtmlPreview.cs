@@ -227,7 +227,7 @@ public partial class PowerPointHandler
         var pending = document.querySelectorAll('.katex-formula:not(.katex-rendered)');
         if (pending.length === 0) return;
         if (typeof katex === 'undefined') {
-            // Lazy-load on first demand — covers watch mode where the initial
+            // Lazy-load on first demand — handles watch mode where the initial
             // doc had no formulas (KaTeX tags omitted from head), then a
             // formula arrived via SSE patch.
             if (!window._katexLoading) {
@@ -416,9 +416,42 @@ public partial class PowerPointHandler
             var masterBg = slidePart.SlideLayoutPart?.SlideMasterPart?.SlideMaster?.CommonSlideData?.Background?.BackgroundProperties;
             bgPr = layoutBg ?? masterBg;
         }
-        if (bgPr == null) return "";
+        if (bgPr == null)
+        {
+            // R4-3: a slide can style its background via <p:bgRef> (a theme
+            // background-fill-style index + a schemeClr) instead of explicit
+            // bgPr. bgPr is null in that case, so resolve the bgRef's scheme
+            // color against the theme map (same resolver the chart series use)
+            // and paint it; previously this fell through to "" → white.
+            var bgRef = slide.CommonSlideData?.Background?.GetFirstChild<BackgroundStyleReference>()
+                ?? slidePart.SlideLayoutPart?.SlideLayout?.CommonSlideData?.Background?.GetFirstChild<BackgroundStyleReference>()
+                ?? slidePart.SlideLayoutPart?.SlideMasterPart?.SlideMaster?.CommonSlideData?.Background?.GetFirstChild<BackgroundStyleReference>();
+            var bgRefColor = bgRef != null ? ResolveStyleMatrixRefColor(bgRef, themeColors) : null;
+            if (bgRefColor != null) return $"background:{bgRefColor};";
+            return "";
+        }
 
         return BackgroundPropertiesToCss(bgPr, slidePart, themeColors);
+    }
+
+    // R4-3: resolve a <p:bgRef>/<a:*Ref> style-matrix reference's color. The
+    // reference carries a direct schemeClr (or srgbClr) child; resolve it
+    // through the theme map exactly like a solidFill body. The idx (which theme
+    // bgFillStyle to use) is not modelled here — we surface the explicit color
+    // override, which is what PowerPoint paints when present.
+    private static string? ResolveStyleMatrixRefColor(OpenXmlElement styleRef, Dictionary<string, string> themeColors)
+    {
+        var schemeColor = styleRef.GetFirstChild<Drawing.SchemeColor>();
+        if (schemeColor?.Val?.HasValue == true)
+        {
+            var schemeName = schemeColor.Val!.InnerText;
+            if (schemeName != null && themeColors.TryGetValue(schemeName, out var themeHex))
+                return ApplyColorTransforms(themeHex, schemeColor);
+        }
+        var srgb = styleRef.GetFirstChild<Drawing.RgbColorModelHex>();
+        if (srgb?.Val?.Value != null)
+            return $"#{srgb.Val.Value}";
+        return null;
     }
 
     private static string BackgroundPropertiesToCss(BackgroundProperties bgPr, OpenXmlPart part, Dictionary<string, string> themeColors)
@@ -440,7 +473,10 @@ public partial class PowerPointHandler
             var dataUri = BlipToDataUri(blipFill, part);
             if (dataUri != null)
             {
-                var css = $"background:url('{dataUri}') center/cover no-repeat;";
+                // R4-4: honor <a:tile> — repeat at native size rather than cover.
+                var css = blipFill.GetFirstChild<Drawing.Tile>() != null
+                    ? $"background:url('{dataUri}') repeat;background-size:auto;"
+                    : $"background:url('{dataUri}') center/cover no-repeat;";
                 // R59-5: surface <a:alphaModFix amt="..."/> as CSS opacity so
                 // the HTML preview matches PowerPoint's faded image bg render.
                 // amt is 0..100000 (100000 = opaque). Skip when opaque/default
