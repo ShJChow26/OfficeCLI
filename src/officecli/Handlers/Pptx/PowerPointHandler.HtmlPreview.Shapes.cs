@@ -894,7 +894,15 @@ public partial class PowerPointHandler
             }
         }
 
+        // biLevel — Set.Media writes <a:biLevel thresh="N"/> under a:blip,
+        // converting the picture to 1-bit black/white at threshold N. CSS has
+        // no true threshold, so approximate with grayscale(1) plus a heavy
+        // contrast boost to push midtones toward pure black/white.
+        var picBiLevel = picBlipForFx?.GetFirstChild<Drawing.BiLevel>();
+
         var filterParts = new List<string>();
+        if (picBiLevel != null)
+            filterParts.Add("grayscale(1) contrast(1000%)");
         // CSS brightness(1) = no change; +N% brightness → brightness(1 + N/100).
         if (brightnessPct.HasValue && Math.Abs(brightnessPct.Value) > 0.01)
             filterParts.Add($"brightness({1 + brightnessPct.Value / 100.0:0.###})");
