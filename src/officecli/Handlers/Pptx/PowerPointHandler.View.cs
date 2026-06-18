@@ -516,6 +516,11 @@ public partial class PowerPointHandler
         int issueNum = 0;
         int slideNum = 0;
 
+        // Slide dimensions for the off-slide geometry check (16:9 default if unset).
+        var slideSize = _doc.PresentationPart?.Presentation?.SlideSize;
+        long slideW = (long)(slideSize?.Cx?.Value ?? 12192000);
+        long slideH = (long)(slideSize?.Cy?.Value ?? 6858000);
+
         foreach (var slidePart in GetSlideParts())
         {
             slideNum++;
@@ -710,7 +715,6 @@ public partial class PowerPointHandler
             // suggestion. A dedicated a11y audit mode is the right home for
             // this kind of structural lint if it returns later.
 
-            // Check for font consistency issues
             int shapeIdx = 0;
             foreach (var shape in shapes)
             {
@@ -731,24 +735,74 @@ public partial class PowerPointHandler
                     });
                 }
 
-                var runs = shape.Descendants<Drawing.Run>().ToList();
-                if (runs.Count <= 1) continue;
-
-                var fonts = runs.Select(r =>
-                    r.RunProperties?.GetFirstChild<Drawing.LatinFont>()?.Typeface
-                    ?? r.RunProperties?.GetFirstChild<Drawing.EastAsianFont>()?.Typeface)
-                    .Where(f => f != null).Distinct().ToList();
-
-                if (fonts.Count > 1)
+                // Off-slide: a text-bearing shape whose declared box extends
+                // substantially past a slide edge. Box geometry only (x/y/w/h) —
+                // a shape positioned off the canvas is a layout defect regardless
+                // of how its text wraps. Text-scoped so full-bleed pictures /
+                // decorative fills (legit bleed) don't trip it. 0.5cm tolerance
+                // ignores boxes that only graze the edge.
+                var offText = GetShapeText(shape);
+                var offXfrm = shape.ShapeProperties?.Transform2D;
+                if (!string.IsNullOrWhiteSpace(offText)
+                    && offXfrm?.Offset?.X != null && offXfrm.Offset.Y != null
+                    && offXfrm.Extents?.Cx != null && offXfrm.Extents.Cy != null)
                 {
-                    issues.Add(new DocumentIssue
+                    long ox = offXfrm.Offset.X!.Value, oy = offXfrm.Offset.Y!.Value;
+                    long ow = offXfrm.Extents.Cx!.Value, oh = offXfrm.Extents.Cy!.Value;
+                    const long offTol = 180000; // 0.5cm in EMU
+                    long offL = -ox, offT = -oy, offR = (ox + ow) - slideW, offB = (oy + oh) - slideH;
+                    long offWorst = Math.Max(Math.Max(offL, offR), Math.Max(offT, offB));
+                    if (offWorst > offTol)
                     {
-                        Id = $"F{++issueNum}",
-                        Type = IssueType.Format,
-                        Severity = IssueSeverity.Info,
-                        Path = shapePath,
-                        Message = $"Inconsistent fonts in text box: {string.Join(", ", fonts)}"
-                    });
+                        string offEdge = offWorst == offR ? "right" : offWorst == offB ? "bottom"
+                                       : offWorst == offL ? "left" : "top";
+                        issues.Add(new DocumentIssue
+                        {
+                            Id = $"O{++issueNum}",
+                            Type = IssueType.Format,
+                            Severity = IssueSeverity.Warning,
+                            Path = shapePath,
+                            Message = $"Text shape extends {offWorst / 360000.0:F1}cm past slide {offEdge} edge"
+                        });
+                    }
+                }
+
+                // Low contrast: a shape with its OWN opaque dark solid fill that
+                // carries opaque dark text reads fine on a laptop and vanishes on
+                // projection. Declared-model only — the shape's explicit fill IS
+                // the backdrop for its own runs, so there is no z-order guesswork
+                // (unlike text over a fill=none box sitting on another shape). Scoped
+                // tight to keep false positives near zero: explicit srgbClr on BOTH
+                // fill and run (scheme / inherited colors skipped), translucent runs
+                // skipped (intentional ghost / watermark text), and any color carrying
+                // a +lumMod/+shade transform skipped (those shift brightness). Floor
+                // matches the SKILL contrast rule: fill < 30%, text < 80% brightness.
+                var fillSolid = shape.ShapeProperties?.GetFirstChild<Drawing.SolidFill>();
+                if (fillSolid != null
+                    && TryOpaqueRgbLuminance(ReadColorFromFill(fillSolid), out double fillLum, out _)
+                    && fillLum < 0.30 * 255)
+                {
+                    foreach (var run in shape.Descendants<Drawing.Run>())
+                    {
+                        if (run.Text?.Text is not { Length: > 0 }) continue;
+                        var runSolid = run.RunProperties?.GetFirstChild<Drawing.SolidFill>();
+                        if (runSolid == null) continue;
+                        if (TryOpaqueRgbLuminance(ReadColorFromFill(runSolid), out double runLum, out string runHex)
+                            && runLum < 0.80 * 255)
+                        {
+                            issues.Add(new DocumentIssue
+                            {
+                                Id = $"C{++issueNum}",
+                                Type = IssueType.Format,
+                                Subtype = Core.IssueSubtypes.LowContrast,
+                                Severity = IssueSeverity.Warning,
+                                Path = shapePath,
+                                Message = $"Low-contrast text #{runHex} on dark fill — unreadable on projection. "
+                                        + "Use FFFFFF or a color brighter than 80%."
+                            });
+                            break; // one report per shape is enough
+                        }
+                    }
                 }
             }
 
@@ -786,26 +840,6 @@ public partial class PowerPointHandler
                                       "Add empty cells or use gridSpan to merge."
                         });
                     }
-                }
-            }
-
-            // CONSISTENCY(pptx-group-flatten): alt-text accessibility check
-            // applies to every picture on the slide, including those nested in
-            // groups.
-            foreach (var pic in shapeTree.Descendants<Picture>())
-            {
-                var alt = pic.NonVisualPictureProperties?.NonVisualDrawingProperties?.Description?.Value;
-                if (string.IsNullOrEmpty(alt))
-                {
-                    var name = pic.NonVisualPictureProperties?.NonVisualDrawingProperties?.Name?.Value ?? "?";
-                    issues.Add(new DocumentIssue
-                    {
-                        Id = $"F{++issueNum}",
-                        Type = IssueType.Format,
-                        Severity = IssueSeverity.Info,
-                        Path = $"/slide[{slideNum}]",
-                        Message = $"Picture \"{name}\" is missing alt text (accessibility issue)"
-                    });
                 }
             }
 
@@ -881,4 +915,36 @@ public partial class PowerPointHandler
     // IsDynamicSlideFieldType has been collapsed into Helpers.cs's
     // IsDynamicSlideFieldTypeStatic — single source of truth.
     private static bool IsDynamicSlideFieldType(string fldType) => IsDynamicSlideFieldTypeStatic(fldType);
+
+    /// <summary>
+    /// Parse a <see cref="ReadColorFromFill"/> result into a perceived luminance
+    /// (0–255, <c>r*0.299 + g*0.587 + b*0.114</c>) for the low-contrast check.
+    /// Returns false — caller skips — for anything that is not a clean opaque
+    /// explicit RGB: scheme/preset/system color names (non-hex), colors carrying
+    /// a <c>+lumMod/+shade/…</c> transform suffix, and translucent colors
+    /// (8-digit <c>RRGGBBAA</c> with alpha &lt; 80%). This keeps the check on
+    /// firmly declared ground where the false-positive rate is near zero.
+    /// </summary>
+    private static bool TryOpaqueRgbLuminance(string? color, out double luminance, out string hex6)
+    {
+        luminance = 0;
+        hex6 = "";
+        if (string.IsNullOrEmpty(color)) return false;
+        if (color.Contains('+')) return false;          // +lumMod/+shade transform — brightness shifts, skip
+        var hex = color.TrimStart('#');
+        if (hex.Length != 6 && hex.Length != 8) return false;   // scheme names / partial → skip
+        foreach (var c in hex) if (!Uri.IsHexDigit(c)) return false;
+        if (hex.Length == 8)
+        {
+            int a = Convert.ToInt32(hex.Substring(6, 2), 16); // CSS RRGGBBAA — alpha last
+            if (a < 0.80 * 255) return false;            // translucent (ghost / watermark) — intentional, skip
+            hex = hex.Substring(0, 6);
+        }
+        int r = Convert.ToInt32(hex.Substring(0, 2), 16);
+        int g = Convert.ToInt32(hex.Substring(2, 2), 16);
+        int b = Convert.ToInt32(hex.Substring(4, 2), 16);
+        luminance = r * 0.299 + g * 0.587 + b * 0.114;
+        hex6 = hex.ToUpperInvariant();
+        return true;
+    }
 }

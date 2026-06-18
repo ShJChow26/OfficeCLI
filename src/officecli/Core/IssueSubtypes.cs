@@ -32,6 +32,14 @@ public static class IssueSubtypes
     /// as an UnsupportedWarning during dump; the surfaced site is the slide
     /// owning the notes (<c>/slide[N]/notes</c>).</summary>
     public const string NotesUnresolvedRid = "notes_unresolved_rid";
+    /// <summary>pptx-only: a shape with its own opaque dark solid fill carries
+    /// opaque dark text (fill brightness &lt; 30%, run brightness &lt; 80%) — the
+    /// text is unreadable when projected. Declared-model only: the shape's
+    /// explicit fill is compared against its explicit run colors, so the
+    /// backdrop is unambiguous (no z-order guesswork). Scheme/inherited colors,
+    /// translucent runs, and colors carrying lumMod/shade transforms are
+    /// skipped to keep false positives near zero. Format bucket, Warning.</summary>
+    public const string LowContrast = "low_contrast";
 
     /// <summary>Broad IssueType bucket names — the canonical surface shown
     /// in error messages and help. Single-letter aliases (<see cref="BucketAliases"/>)
@@ -55,7 +63,7 @@ public static class IssueSubtypes
     {
         FormulaNotEvaluated, FormulaCacheStale, FormulaRefMissingSheet, FormulaEvalError,
         FieldNotEvaluated, FieldCacheStale,
-        SlideFieldNotEvaluated, NotesUnresolvedRid,
+        SlideFieldNotEvaluated, NotesUnresolvedRid, LowContrast,
         ChartSeriesRefMissingSheet, ChartCacheStale,
         DefinedNameBroken, DefinedNameTargetMissing,
         BrokenPartRef,
@@ -80,7 +88,7 @@ public static class IssueSubtypes
             + "Opt-in only (request by exact name; not included in --type content): "
             + string.Join(", ", OptInSubtypes) + ". "
             + "Subtypes are format-specific — formula_* / chart_* / definedname_* apply to xlsx, "
-            + "field_* to docx, slide_field_* / notes_unresolved_rid / broken_part_ref to pptx; requesting a subtype that does not apply to "
+            + "field_* to docx, slide_field_* / notes_unresolved_rid / broken_part_ref / low_contrast to pptx; requesting a subtype that does not apply to "
             + "the queried file returns count=0 (not an error). "
             + "All values are case-insensitive and surrounding whitespace is trimmed.";
     }
