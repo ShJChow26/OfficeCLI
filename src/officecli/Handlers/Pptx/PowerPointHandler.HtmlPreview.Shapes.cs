@@ -1337,6 +1337,14 @@ public partial class PowerPointHandler
                 sb.Append("<div style=\"width:100%;height:100%;background:rgba(128,128,128,0.15);display:flex;align-items:center;justify-content:center;color:rgba(128,128,128,0.5);font-size:12px\">Image</div>");
             }
         }
+        else if (blip?.Link?.Value is { Length: > 0 })
+        {
+            // R15-3: a linked picture (<a:blip r:link="...">, no r:embed) references an
+            // external image we do not fetch. Mirror the OLE/3D placeholder pattern and
+            // emit a grey "Linked image" surface so the shape is visible rather than an
+            // empty div. We deliberately do NOT resolve/download the external target.
+            sb.Append("<div style=\"width:100%;height:100%;background:rgba(128,128,128,0.15);display:flex;align-items:center;justify-content:center;color:rgba(128,128,128,0.5);font-size:12px\">Linked image</div>");
+        }
 
         sb.AppendLine("</div>");
     }
@@ -1345,7 +1353,10 @@ public partial class PowerPointHandler
 
     private static void RenderConnector(StringBuilder sb, ConnectionShape cxn, Dictionary<string, string> themeColors, string? dataPath = null,
         (long x, long y, long cx, long cy)? overridePos = null)
-        => RenderConnector(sb, cxn.ShapeProperties, themeColors, dataPath, overridePos);
+        // R15-1: resolve the connector's txBody (handles the SDK OpenXmlUnknownElement
+        // parse) and forward it so the label renders as a centered overlay on the line.
+        => RenderConnector(sb, cxn.ShapeProperties, themeColors, dataPath, overridePos,
+            ResolveConnectorTextBody(cxn));
 
     // Shared SVG line/polyline/path renderer for both <p:cxnSp> connectors and
     // <p:sp> shapes with prst="line". Reads geometry + outline from a
@@ -1356,7 +1367,8 @@ public partial class PowerPointHandler
     // EMU coords are emitted as offsets from the group container — placing the line
     // far outside the group div, where it disappears.
     private static void RenderConnector(StringBuilder sb, ShapeProperties? spPr, Dictionary<string, string> themeColors, string? dataPath = null,
-        (long x, long y, long cx, long cy)? overridePos = null)
+        (long x, long y, long cx, long cy)? overridePos = null,
+        DocumentFormat.OpenXml.Presentation.TextBody? cxnTextBody = null)
     {
         var xfrm = spPr?.Transform2D;
         if (overridePos == null && (xfrm?.Offset == null || xfrm?.Extents == null)) return;
@@ -1385,10 +1397,28 @@ public partial class PowerPointHandler
         var lineWidth = 1.0;
         var lineCap = "flat";
         var lineCmpd = "sng";
+        // R15-2: a connector outline <a:ln>/<a:gradFill> can't be represented by a
+        // single solid stroke; mirror the shape outline path (line ~167) by building
+        // an SVG <linearGradient> def from the stops and stroking with url(#id). When
+        // the gradient is present, gradStrokeId/gradStrokeDef are populated and the
+        // solid stroke color is set to the first stop (fallback for renderers that
+        // can't resolve the def). Without this the stroke fell back to theme tx1/dk1.
+        string? gradStrokeId = null;
+        string? gradStrokeDef = null;
         if (outline != null)
         {
-            var c = ResolveFillColor(outline.GetFirstChild<Drawing.SolidFill>(), themeColors);
-            if (c != null) lineColor = c;
+            var outlineGradFill = outline.GetFirstChild<Drawing.GradientFill>();
+            if (outlineGradFill != null)
+            {
+                gradStrokeId = $"cxg{_markerCounter++}";
+                gradStrokeDef = BuildSvgLinearGradient(outlineGradFill, gradStrokeId, themeColors, out var firstStop);
+                if (firstStop != null) lineColor = firstStop;
+            }
+            else
+            {
+                var c = ResolveFillColor(outline.GetFirstChild<Drawing.SolidFill>(), themeColors);
+                if (c != null) lineColor = c;
+            }
             if (outline.Width?.HasValue == true) lineWidth = outline.Width.Value / EmuConverter.EmuPerPointF;
             if (outline.CapType?.HasValue == true) lineCap = outline.CapType.InnerText ?? "flat";
             if (outline.CompoundLineType?.HasValue == true) lineCmpd = outline.CompoundLineType.InnerText ?? "sng";
@@ -1525,7 +1555,16 @@ public partial class PowerPointHandler
         // Line cap (rnd→round pill dash ends, sq→square, flat→butt) applies to the stroke.
         var linecapAttr = $" stroke-linecap=\"{CapToSvgLinecap(lineCap)}\"";
         // CONSISTENCY(shape-stroke-unit): stroke-width in pt matches CSS border path (see R3 fix).
-        var strokeAttrs = $"stroke=\"{safeColor}\" stroke-width=\"{lineWidth:0.##}pt\" fill=\"none\"{linecapAttr}{dashAttr}{markerStartAttr}{markerEndAttr}";
+        // R15-2: stroke with the gradient def when present, else the (first-stop/solid) color.
+        var strokePaint = gradStrokeId != null ? $"url(#{gradStrokeId})" : safeColor;
+        var strokeAttrs = $"stroke=\"{strokePaint}\" stroke-width=\"{lineWidth:0.##}pt\" fill=\"none\"{linecapAttr}{dashAttr}{markerStartAttr}{markerEndAttr}";
+        // Merge the gradient def into the SVG <defs> alongside any marker defs.
+        if (gradStrokeDef != null)
+        {
+            markerDefs = string.IsNullOrEmpty(markerDefs)
+                ? $"<defs>{gradStrokeDef}</defs>"
+                : markerDefs.Replace("</defs>", $"{gradStrokeDef}</defs>");
+        }
         // Compound line (cmpd=dbl/thickThin/thinThick/tri): SVG strokes are a single path,
         // so we approximate "two parallel lines" by overlaying a thinner transparent-gap
         // stroke down the center of the full-width stroke. This splits the visible stroke
@@ -1593,6 +1632,15 @@ public partial class PowerPointHandler
             if (isCompound)
                 sb.AppendLine($"        <line x1=\"{svgX1}\" y1=\"{svgY1}\" x2=\"{svgX2}\" y2=\"{svgY2}\" {compoundGapAttrs}/>");
             sb.AppendLine("      </svg>");
+        }
+        // R15-1: overlay the connector's text label, centered over the line's bounding
+        // box. The connector div is position:absolute with no intrinsic text host, so we
+        // emit an absolutely-positioned, centered inner div and render the txBody into it.
+        if (cxnTextBody != null && !string.IsNullOrWhiteSpace(cxnTextBody.InnerText))
+        {
+            sb.Append("      <div style=\"position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none\">");
+            RenderTextBody(sb, cxnTextBody, themeColors);
+            sb.AppendLine("</div>");
         }
         sb.AppendLine("    </div>");
     }

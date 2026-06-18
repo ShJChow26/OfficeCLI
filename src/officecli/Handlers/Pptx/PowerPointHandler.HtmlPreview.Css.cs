@@ -288,6 +288,56 @@ public partial class PowerPointHandler
 
     // ==================== CSS Helper: Gradient ====================
 
+    /// <summary>
+    /// R15-2: Build an SVG &lt;linearGradient&gt; element from an OOXML &lt;a:gradFill&gt;
+    /// for use as a connector/line stroke (stroke="url(#id)"). Reuses the same stop
+    /// color resolution as GradientToCss. <paramref name="firstStopColor"/> returns the
+    /// first stop's color as a solid fallback. Returns "" when there are fewer than 2 stops.
+    /// </summary>
+    private static string BuildSvgLinearGradient(Drawing.GradientFill gradFill, string id,
+        Dictionary<string, string> themeColors, out string? firstStopColor)
+    {
+        firstStopColor = null;
+        var stops = gradFill.GradientStopList?.Elements<Drawing.GradientStop>().ToList();
+        if (stops == null || stops.Count < 2) return "";
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"<linearGradient id=\"{id}\">");
+        foreach (var gs in stops)
+        {
+            var color = ResolveGradientStopColor(gs, themeColors);
+            firstStopColor ??= color;
+            var pos = (gs.Position?.Value ?? 0) / 1000.0;
+            sb.Append($"<stop offset=\"{pos:0.##}%\" stop-color=\"{CssSanitizeColor(color)}\"/>");
+        }
+        sb.Append("</linearGradient>");
+        return sb.ToString();
+    }
+
+    /// <summary>Resolve a single gradient stop's color (shared by GradientToCss / BuildSvgLinearGradient).</summary>
+    private static string ResolveGradientStopColor(Drawing.GradientStop gs, Dictionary<string, string> themeColors)
+    {
+        var color = ResolveFillColor(gs.GetFirstChild<Drawing.SolidFill>(), themeColors);
+        if (color != null) return color;
+        var rgbEl = gs.GetFirstChild<Drawing.RgbColorModelHex>();
+        var rgb = rgbEl?.Val?.Value;
+        if (rgb != null && rgb.Length >= 6 && rgb[..6].All(char.IsAsciiHexDigit))
+        {
+            var alpha = rgbEl!.GetFirstChild<Drawing.Alpha>()?.Val?.Value;
+            if (alpha.HasValue && alpha.Value < 100000)
+            {
+                var (r, g, b) = ColorMath.HexToRgb(rgb[..6]);
+                return $"rgba({r},{g},{b},{alpha.Value / 100000.0:0.##})";
+            }
+            return $"#{rgb[..6]}";
+        }
+        var schemeEl = gs.GetFirstChild<Drawing.SchemeColor>();
+        var scheme = schemeEl?.Val?.InnerText;
+        if (scheme != null && themeColors.TryGetValue(scheme, out var tc))
+            return ApplyColorTransforms(tc, schemeEl!);
+        return "transparent";
+    }
+
     private static string GradientToCss(Drawing.GradientFill gradFill, Dictionary<string, string> themeColors)
     {
         var stops = gradFill.GradientStopList?.Elements<Drawing.GradientStop>().ToList();
