@@ -124,8 +124,8 @@ public partial class ExcelHandler
         var sheetFmtPr = ws.GetFirstChild<SheetFormatProperties>();
         double defaultRowHeightPt = sheetFmtPr?.DefaultRowHeight?.Value ?? 15.0;
         double defaultColWidthPt = sheetFmtPr?.DefaultColumnWidth?.Value != null
-            ? sheetFmtPr.DefaultColumnWidth.Value * 7.0017 * 0.75
-            : 8.43 * 7.0017 * 0.75;
+            ? sheetFmtPr.DefaultColumnWidth.Value * ColWidthCharToPt
+            : ExcelDefaultColWidthPt;
         return new OverflowContext(BuildMergeMap(ws), GetColumnWidths(ws), rowHeights,
             defaultRowHeightPt, defaultColWidthPt);
     }

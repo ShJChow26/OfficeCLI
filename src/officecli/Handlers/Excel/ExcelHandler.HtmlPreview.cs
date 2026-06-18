@@ -11,6 +11,16 @@ namespace OfficeCli.Handlers;
 
 public partial class ExcelHandler
 {
+    // Excel stores column width in characters; convert to points via
+    // 7.0017 px/char (Calibri 11 DEFAULT_CHARACTER_WIDTH) then 0.75 px→pt.
+    // Shared by the grid renderer, the chart-overlay sizing, and the overflow
+    // checker so a column without an explicit width measures identically in all
+    // three (a drift here mis-aligns chart overlays against the grid they sit on).
+    private const double ColWidthCharToPt = 7.0017 * 0.75;
+    // Effective column width (pt) when the sheet declares no <sheetFormatPr
+    // defaultColWidth> — Excel's 8.43-char standard (≈ 44.27pt / 59px).
+    private const double ExcelDefaultColWidthPt = 8.43 * ColWidthCharToPt;
+
     // Wire the formula evaluator's TEXT() up to the cell number-format engine so
     // TEXT(value, format) applies date/time/percent/currency codes identically to
     // a cell carrying that numFmt. Core cannot reference Handlers, so the hook is
@@ -270,7 +280,7 @@ public partial class ExcelHandler
     // ==================== Sheet Rendering ====================
 
     private void RenderSheetTable(StringBuilder sb, string sheetName, WorksheetPart worksheetPart, Stylesheet? stylesheet,
-        List<(int fromRow, int toRow, int fromCol, int toCol, int widthPtHint, string html)>? charts = null, int sheetIdx = 0,
+        List<(int fromRow, int toRow, int fromCol, int toCol, double colOffsetPt, string html)>? charts = null, int sheetIdx = 0,
         bool showGridLines = true)
     {
         var ws = GetSheet(worksheetPart);
@@ -287,7 +297,7 @@ public partial class ExcelHandler
         // Excel column width → pixels: chars * 7.0017 (DEFAULT_CHARACTER_WIDTH for Calibri 11)
         // pt = px * 0.75
         var defaultColWidthPt = sheetFmtPr?.DefaultColumnWidth?.Value != null
-            ? sheetFmtPr.DefaultColumnWidth.Value * 7.0017 * 0.75 : 8.43 * 7.0017 * 0.75;
+            ? sheetFmtPr.DefaultColumnWidth.Value * ColWidthCharToPt : ExcelDefaultColWidthPt;
         var defaultRowHeightPt = sheetFmtPr?.DefaultRowHeight?.Value ?? 15.0;
 
         // Read default font size from stylesheet
@@ -607,7 +617,7 @@ public partial class ExcelHandler
         if (charts != null)
         {
             var rowHeaderWidthPt = 30.0; // matches .row-header-col CSS
-            foreach (var (fromRow, toRow, fromCol, toCol, widthPtHint, html) in charts)
+            foreach (var (fromRow, toRow, fromCol, toCol, colOffsetPt, html) in charts)
             {
                 // Compute left position: sum of column widths from col 1 to fromCol + row header
                 double leftPt = rowHeaderWidthPt;
@@ -630,6 +640,13 @@ public partial class ExcelHandler
                     if (hiddenCols.Contains(c)) continue;
                     widthPt += colWidths.TryGetValue(c, out var cw2) ? cw2 : defaultColWidthPt;
                 }
+                // Add the partial-column EMU offset — the fraction of the from/to
+                // columns the card starts/ends inside, which the whole-column sum
+                // above drops, leaving the card a fraction of a column narrow vs
+                // Excel. The sum above stays the source of truth for the columns
+                // (it alone is hidden-column- and sheet-default-width-aware); only
+                // this sub-column remainder is threaded in. Pictures/shapes pass 0.
+                widthPt += colOffsetPt;
                 double heightPt = 0;
                 for (int r = fromRow + 1; r <= toRow && r <= maxRow; r++)
                 {
@@ -651,12 +668,6 @@ public partial class ExcelHandler
                     if (widthPt < 1) widthPt = defaultColWidthPt;
                     if (heightPt < 1) heightPt = defaultRowHeightPt;
                 }
-                // Charts supply their EstimateChartSize width (which includes the
-                // partial-column EMU offset this column-sum drops); honour it so the
-                // card matches Excel's width instead of being clamped a column short.
-                // Pictures/shapes pass 0, so this only affects charts.
-                if (widthPtHint > 0) widthPt = widthPtHint;
-
                 sb.AppendLine($"<div style=\"position:absolute;left:{leftPt:0.##}pt;top:{topPt:0.##}pt;width:{widthPt:0.##}pt;height:{heightPt:0.##}pt;z-index:10;pointer-events:auto;display:flex\" data-from-col=\"{fromCol}\" data-from-row=\"{fromRow}\">");
                 sb.Append(html);
                 sb.AppendLine("</div>");

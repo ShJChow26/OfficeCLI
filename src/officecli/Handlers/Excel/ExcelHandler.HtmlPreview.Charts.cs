@@ -30,9 +30,9 @@ public partial class ExcelHandler
     /// Pre-render all charts and return them with their anchor row/col positions.
     /// Charts with overlapping row ranges are grouped into flex rows.
     /// </summary>
-    private List<(int fromRow, int toRow, int fromCol, int toCol, int widthPtHint, string html)> CollectSheetCharts(WorksheetPart worksheetPart, string sheetName = "")
+    private List<(int fromRow, int toRow, int fromCol, int toCol, double colOffsetPt, string html)> CollectSheetCharts(WorksheetPart worksheetPart, string sheetName = "")
     {
-        var result = new List<(int fromRow, int toRow, int fromCol, int toCol, int widthPtHint, string html)>();
+        var result = new List<(int fromRow, int toRow, int fromCol, int toCol, double colOffsetPt, string html)>();
         var drawingsPart = worksheetPart.DrawingsPart;
         if (drawingsPart?.WorksheetDrawing == null) return result;
 
@@ -62,20 +62,36 @@ public partial class ExcelHandler
         }).OrderBy(x => x.fromRow).ThenBy(x => x.fromCol).ToList();
 
         // Each chart gets its own overlay (no flex grouping) so drag-to-move works independently
-        var anchorColWidths = GetColumnWidths(GetSheet(worksheetPart));
         foreach (var (gf, fromRow, toRow, fromCol, toCol) in chartAnchors)
         {
             var chartSb = new StringBuilder();
             RenderExcelChart(chartSb, gf, drawingsPart, worksheetPart, sheetName, gfIndexMap.GetValueOrDefault(gf));
-            // The overlay box width must match the chart's own EstimateChartSize (the
-            // value behind the chart-container's max-width) — the column-sum used in
-            // the anchor loop drops the partial-column EMU offset, leaving the card
-            // clamped narrower than Excel. Pass the estimate as the box-width hint.
-            var (estWidthPt, _) = EstimateChartSize(gf, anchorColWidths);
-            result.Add((fromRow, toRow, fromCol, toCol, estWidthPt, chartSb.ToString()));
+            // Thread the anchor's partial-column EMU offset to the overlay loop. Its
+            // own column-sum (which is hidden-column- and sheet-default-width-aware)
+            // drops this sub-column remainder, leaving the card a fraction of a
+            // column narrow vs Excel; the loop adds it back.
+            result.Add((fromRow, toRow, fromCol, toCol, ChartColOffsetPt(gf), chartSb.ToString()));
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Partial-column EMU offset of a chart's TwoCellAnchor, in points:
+    /// (toColumnOffset − fromColumnOffset) — the fraction of the from/to columns
+    /// the card starts/ends inside. The overlay loop adds this to its whole-column
+    /// sum so the card width matches Excel's sub-column anchor. Returns 0 when the
+    /// frame is not a TwoCellAnchor (no sub-column geometry to recover).
+    /// </summary>
+    private static double ChartColOffsetPt(XDR.GraphicFrame gf)
+    {
+        var anchor = gf.Parent as XDR.TwoCellAnchor;
+        var from = anchor?.FromMarker;
+        var to = anchor?.ToMarker;
+        if (from == null || to == null) return 0;
+        var fromOff = long.TryParse(from.ColumnOffset?.Text, out var fco) ? fco : 0;
+        var toOff = long.TryParse(to.ColumnOffset?.Text, out var tco) ? tco : 0;
+        return (toOff - fromOff) / EmuConverter.EmuPerPointF;
     }
 
     private void RenderExcelChart(StringBuilder sb, XDR.GraphicFrame gf,
@@ -277,12 +293,12 @@ public partial class ExcelHandler
         var toRowOff = long.TryParse(to.RowOffset?.Text, out var tro) ? tro : 0;
 
         // Sum actual column widths; fall back to the grid's default column width
-        // (8.43 chars * 7.0017 px/char * 0.75 px→pt ≈ 44.27pt / 59px) for columns
-        // without an explicit width — matching how the grid renders them and how
-        // Excel positions the chart. (A 48pt fallback over-widened it ~half a column.)
+        // (≈ 44.27pt / 59px) for columns without an explicit width — matching how the
+        // grid renders them. Used only for the inner SVG's max-width/aspect ratio;
+        // the overlay box itself is sized by the grid-aware loop in RenderSheetTable.
         double totalWidth = 0;
         for (int c = fromCol + 1; c <= toCol; c++)
-            totalWidth += (colWidths != null && colWidths.TryGetValue(c, out var w)) ? w : 8.43 * 7.0017 * 0.75;
+            totalWidth += (colWidths != null && colWidths.TryGetValue(c, out var w)) ? w : ExcelDefaultColWidthPt;
         totalWidth += (toColOff - fromColOff) / EmuConverter.EmuPerPointF;
 
         // Default row height ~15pt; offsets in EMU (1pt = 12700 EMU)
