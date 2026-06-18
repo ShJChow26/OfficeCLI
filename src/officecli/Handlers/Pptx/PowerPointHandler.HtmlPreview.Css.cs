@@ -980,8 +980,12 @@ public partial class PowerPointHandler
     /// </summary>
     private Dictionary<string, string> ResolveThemeColorMap()
     {
-        var colorScheme = _doc.PresentationPart?.SlideMasterParts?.FirstOrDefault()
-            ?.ThemePart?.Theme?.ThemeElements?.ColorScheme;
+        // Use the same theme-part resolution as Get/Set (GetThemePart prefers the
+        // presentationPart's own theme, then the first master's) so a Set hlink/
+        // accent color is reflected here instead of reading a stale master theme.
+        var colorScheme = GetColorScheme()
+            ?? _doc.PresentationPart?.SlideMasterParts?.FirstOrDefault()
+                ?.ThemePart?.Theme?.ThemeElements?.ColorScheme;
         return ThemeColorResolver.BuildColorMap(colorScheme, includePptAliases: true);
     }
 

@@ -836,6 +836,125 @@ public partial class PowerPointHandler
     }
 
     /// <summary>
+    /// R7-2: Resolve the inherited default run COLOR for a placeholder shape, walking the
+    /// same inheritance chain as ResolvePlaceholderFontSize (shape lstStyle → layout/master
+    /// placeholder → master text styles). Returns the defRPr solidFill resolved to a hex/theme
+    /// CSS color, or null if no layer carries a color. Mirrors the size resolver so a master
+    /// bodyStyle defRPr solidFill propagates to body placeholders in HTML preview.
+    /// </summary>
+    private static string? ResolvePlaceholderDefaultColor(Shape shape, OpenXmlPart part,
+        Dictionary<string, string> themeColors, int level = 0)
+    {
+        var defRp = ResolvePlaceholderDefRp(shape, part, level,
+            dr => dr.GetFirstChild<Drawing.SolidFill>() != null);
+        var fill = defRp?.GetFirstChild<Drawing.SolidFill>();
+        return ResolveFillColor(fill, themeColors);
+    }
+
+    /// <summary>
+    /// R7-3: Resolve the inherited default line-spacing for a placeholder shape from the same
+    /// inheritance chain. Returns the master/layout defRPr-level lnSpc as a CSS line-height
+    /// fragment (e.g. "line-height:2") or null when no layer specifies lnSpc.
+    /// </summary>
+    private static string? ResolvePlaceholderLineSpacing(Shape shape, OpenXmlPart part, int level = 0)
+    {
+        var lvlPpr = ResolvePlaceholderLevelPpr(shape, part, level,
+            p => p.GetFirstChild<Drawing.LineSpacing>() != null);
+        var lnSpc = lvlPpr?.GetFirstChild<Drawing.LineSpacing>();
+        if (lnSpc == null) return null;
+        var pct = lnSpc.GetFirstChild<Drawing.SpacingPercent>()?.Val?.Value;
+        if (pct.HasValue) return $"line-height:{pct.Value / 100000.0:0.##}";
+        var pts = lnSpc.GetFirstChild<Drawing.SpacingPoints>()?.Val?.Value;
+        if (pts.HasValue) return $"line-height:{pts.Value / 100.0:0.##}pt";
+        return null;
+    }
+
+    /// <summary>
+    /// Shared inheritance walk for placeholder default-run-property resolution. Walks
+    /// shape lstStyle → layout/master matching placeholder lstStyle → master text styles
+    /// and returns the first level paragraph-properties element matching <paramref name="match"/>.
+    /// </summary>
+    private static Drawing.DefaultRunProperties? ResolvePlaceholderDefRp(Shape shape, OpenXmlPart part,
+        int level, Func<Drawing.DefaultRunProperties, bool> match)
+    {
+        var lvlPpr = ResolvePlaceholderLevelPpr(shape, part, level,
+            p => p.GetFirstChild<Drawing.DefaultRunProperties>() is { } dr && match(dr));
+        return lvlPpr?.GetFirstChild<Drawing.DefaultRunProperties>();
+    }
+
+    /// <summary>
+    /// Shared inheritance walk that returns the first level-paragraph-properties element
+    /// (Level1ParagraphProperties etc.) in the placeholder chain matching <paramref name="match"/>.
+    /// </summary>
+    private static OpenXmlElement? ResolvePlaceholderLevelPpr(Shape shape, OpenXmlPart part,
+        int level, Func<OpenXmlElement, bool> match)
+    {
+        var ph = shape.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
+            ?.GetFirstChild<PlaceholderShape>();
+        if (ph == null) return null;
+
+        // 1. Shape's own list style
+        var lstStyle = shape.TextBody?.GetFirstChild<Drawing.ListStyle>();
+        if (GetLevelPpr(lstStyle, level) is { } own && match(own)) return own;
+
+        var phType = ph.Type?.HasValue == true ? ph.Type.Value : PlaceholderValues.Body;
+        bool isTitle = phType == PlaceholderValues.Title || phType == PlaceholderValues.CenteredTitle;
+        bool isSubTitle = phType == PlaceholderValues.SubTitle;
+
+        if (part is SlidePart slidePart)
+        {
+            var layoutTree = slidePart.SlideLayoutPart?.SlideLayout?.CommonSlideData?.ShapeTree;
+            var masterTree = slidePart.SlideLayoutPart?.SlideMasterPart?.SlideMaster?.CommonSlideData?.ShapeTree;
+            foreach (var tree in new[] { layoutTree, masterTree })
+            {
+                if (tree == null) continue;
+                foreach (var candidate in tree.Elements<Shape>())
+                {
+                    var cPh = candidate.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
+                        ?.GetFirstChild<PlaceholderShape>();
+                    if (cPh == null) continue;
+                    if (!PlaceholderMatches(ph, cPh)) continue;
+                    var cLstStyle = candidate.TextBody?.GetFirstChild<Drawing.ListStyle>();
+                    if (GetLevelPpr(cLstStyle, level) is { } cppr && match(cppr)) return cppr;
+                }
+            }
+
+            var masterTxStyles = slidePart.SlideLayoutPart?.SlideMasterPart?.SlideMaster?.TextStyles;
+            if (masterTxStyles != null)
+            {
+                OpenXmlCompositeElement? styleList = isTitle ? masterTxStyles.TitleStyle
+                    : (isSubTitle || phType == PlaceholderValues.Body || phType == PlaceholderValues.Object)
+                        ? masterTxStyles.BodyStyle
+                        : masterTxStyles.OtherStyle;
+                if (GetLevelPpr(styleList, level) is { } sppr && match(sppr)) return sppr;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Get the level paragraph-properties element (Level1ParagraphProperties etc.) for a
+    /// given level from a list style or text style element.
+    /// </summary>
+    private static OpenXmlElement? GetLevelPpr(OpenXmlCompositeElement? styleList, int level)
+    {
+        if (styleList == null) return null;
+        return level switch
+        {
+            0 => styleList.GetFirstChild<Drawing.Level1ParagraphProperties>(),
+            1 => styleList.GetFirstChild<Drawing.Level2ParagraphProperties>(),
+            2 => styleList.GetFirstChild<Drawing.Level3ParagraphProperties>(),
+            3 => styleList.GetFirstChild<Drawing.Level4ParagraphProperties>(),
+            4 => styleList.GetFirstChild<Drawing.Level5ParagraphProperties>(),
+            5 => styleList.GetFirstChild<Drawing.Level6ParagraphProperties>(),
+            6 => styleList.GetFirstChild<Drawing.Level7ParagraphProperties>(),
+            7 => styleList.GetFirstChild<Drawing.Level8ParagraphProperties>(),
+            8 => styleList.GetFirstChild<Drawing.Level9ParagraphProperties>(),
+            _ => styleList.GetFirstChild<Drawing.Level1ParagraphProperties>(),
+        };
+    }
+
+    /// <summary>
     /// Get the DefaultRunProperties for a given paragraph level (0-8) from a list style or text style element.
     /// Maps level 0 → Level1ParagraphProperties, level 1 → Level2ParagraphProperties, etc.
     /// </summary>

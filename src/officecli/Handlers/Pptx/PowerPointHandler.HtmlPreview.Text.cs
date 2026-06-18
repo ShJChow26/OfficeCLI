@@ -45,10 +45,16 @@ public partial class PowerPointHandler
         {
             // Resolve per-paragraph font size based on paragraph level
             int? defaultFontSizeHundredths = null;
+            // R7-2: inherited default run color from the placeholder/master cascade.
+            string? defaultRunColor = null;
+            // R7-3: inherited default line-spacing CSS fragment from the cascade.
+            string? inheritedLineSpacing = null;
             if (placeholderShape != null && placeholderPart != null)
             {
                 int level = para.ParagraphProperties?.Level?.Value ?? 0;
                 defaultFontSizeHundredths = ResolvePlaceholderFontSize(placeholderShape, placeholderPart, level);
+                defaultRunColor = ResolvePlaceholderDefaultColor(placeholderShape, placeholderPart, themeColors, level);
+                inheritedLineSpacing = ResolvePlaceholderLineSpacing(placeholderShape, placeholderPart, level);
             }
             var paraStyles = new List<string>();
 
@@ -102,6 +108,10 @@ public partial class PowerPointHandler
             if (lsPct.HasValue) paraStyles.Add($"line-height:{lsPct.Value / 100000.0:0.##}");
             var lsPts = pProps?.GetFirstChild<Drawing.LineSpacing>()?.GetFirstChild<Drawing.SpacingPoints>()?.Val?.Value;
             if (lsPts.HasValue) paraStyles.Add($"line-height:{lsPts.Value / 100.0:0.##}pt");
+            // R7-3: no explicit lnSpc on the paragraph — inherit the master/layout
+            // bodyStyle lvl lnSpc resolved via the placeholder cascade.
+            else if (!lsPct.HasValue && inheritedLineSpacing != null)
+                paraStyles.Add(inheritedLineSpacing);
 
             // Indent / left margin. OOXML hanging-indent idiom (bullet outside, text inside)
             // is marL>=0 paired with indent<0 (|indent|==marL). We translate marL to CSS
@@ -307,7 +317,7 @@ public partial class PowerPointHandler
             {
                 foreach (var run in runs)
                 {
-                    RenderRun(sb, run, themeColors, defaultFontSizeHundredths, placeholderPart, themeFontFallback, fontScale);
+                    RenderRun(sb, run, themeColors, defaultFontSizeHundredths, placeholderPart, themeFontFallback, fontScale, defaultRunColor);
                 }
             }
 
@@ -322,7 +332,7 @@ public partial class PowerPointHandler
 
     private static void RenderRun(StringBuilder sb, Drawing.Run run, Dictionary<string, string> themeColors,
         int? defaultFontSizeHundredths = null, OpenXmlPart? part = null, string? themeFontFallback = null,
-        double fontScale = 1.0)
+        double fontScale = 1.0, string? defaultRunColor = null)
     {
         var text = run.Text?.Text ?? "";
         if (string.IsNullOrEmpty(text)) return;
@@ -334,7 +344,10 @@ public partial class PowerPointHandler
         // Read <a:hlinkClick> from run.RunProperties, resolve relationship ID
         // via containing part's HyperlinkRelationships to an external URI.
         string? hyperlinkUrl = null;
-        bool hasExplicitColor = rp?.GetFirstChild<Drawing.SolidFill>() != null;
+        bool hasExplicitColor = rp?.GetFirstChild<Drawing.SolidFill>() != null
+            || rp?.GetFirstChild<Drawing.GradientFill>() != null
+            || rp?.GetFirstChild<Drawing.SchemeColor>() != null
+            || rp?.GetFirstChild<Drawing.RgbColorModelHex>() != null;
         bool hasExplicitUnderline = rp?.Underline?.HasValue == true;
         var hlinkClick = rp?.GetFirstChild<Drawing.HyperlinkOnClick>();
         if (hlinkClick?.Id?.Value is string relId && part != null)
@@ -509,6 +522,10 @@ public partial class PowerPointHandler
             var color = ResolveFillColor(solidFill, themeColors);
             if (color != null)
                 styles.Add($"color:{color}");
+            // R7-2: no explicit run color and no gradient/scheme fill — inherit the
+            // default color resolved from the master/layout placeholder cascade.
+            else if (!hasExplicitColor && hlinkClick == null && defaultRunColor != null)
+                styles.Add($"color:{defaultRunColor}");
 
             // Text highlight (a:highlight). Authored only in real PowerPoint /
             // via raw-set (no officecli prop), but `view` renders arbitrary
@@ -571,13 +588,19 @@ public partial class PowerPointHandler
                     styles.Add("vertical-align:sub;font-size:smaller");
             }
         }
+        // R7-2: run with no <a:rPr> at all — still inherit the cascade default color.
+        else if (hlinkClick == null && defaultRunColor != null)
+            styles.Add($"color:{defaultRunColor}");
 
         // Auto-style hyperlink runs that lack explicit color/underline. Uses
         // theme-less fallback #0563C1 (PowerPoint default hyperlink color).
         // Shape-level hyperlinks are deferred (R14-supplemental).
         if (hlinkClick != null)
         {
-            if (!hasExplicitColor) styles.Add("color:#0563C1");
+            if (!hasExplicitColor)
+                styles.Add(themeColors.TryGetValue("hlink", out var hlinkHex) && !string.IsNullOrEmpty(hlinkHex)
+                    ? $"color:#{hlinkHex}"
+                    : "color:#0563C1");
             if (!hasExplicitUnderline) styles.Add("text-decoration:underline");
         }
 
