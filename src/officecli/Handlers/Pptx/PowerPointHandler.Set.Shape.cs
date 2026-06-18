@@ -1138,11 +1138,32 @@ public partial class PowerPointHandler
                     }
                     break;
                 }
+                // R15-4: connector text label. Mirrors the Add.Misc txBody write
+                // path so `set connector --prop text=...` is accepted symmetrically.
+                // Replaces any existing txBody (typed or the SDK-unknown reparse form)
+                // with a fresh single-paragraph single-run label.
+                case "text":
+                {
+                    Core.XmlTextValidator.ValidateOrThrow(value, "text");
+                    cxn.RemoveAllChildren<DocumentFormat.OpenXml.Presentation.TextBody>();
+                    foreach (var unk in cxn.ChildElements.OfType<OpenXmlUnknownElement>()
+                                 .Where(e => e.LocalName == "txBody").ToList())
+                        unk.Remove();
+                    var cxnRunProps = new Drawing.RunProperties { Language = "en-US" };
+                    var cxnPara = new Drawing.Paragraph(new Drawing.Run(cxnRunProps,
+                        MakePreservingText(value)));
+                    var cxnTxBody = new DocumentFormat.OpenXml.Presentation.TextBody(
+                        new Drawing.BodyProperties(),
+                        new Drawing.ListStyle(),
+                        cxnPara);
+                    cxn.AppendChild(cxnTxBody);
+                    break;
+                }
                 default:
                     if (!GenericXmlQuery.SetGenericAttribute(cxn, key, value))
                     {
                         if (unsupported.Count == 0)
-                            unsupported.Add($"{key} (valid connector props: line, color, fill, x, y, width, height, rotation, name, headEnd, tailEnd, geometry, from, to)");
+                            unsupported.Add($"{key} (valid connector props: line, color, fill, x, y, width, height, rotation, name, headEnd, tailEnd, geometry, from, to, text)");
                         else
                             unsupported.Add(key);
                     }
