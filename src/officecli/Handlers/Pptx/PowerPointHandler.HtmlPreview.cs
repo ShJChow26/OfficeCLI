@@ -513,6 +513,11 @@ public partial class PowerPointHandler
             }
         }
 
+        // Pattern slide backgrounds (third-party files) — mirror shape pattFill.
+        var pattFill = bgPr.GetFirstChild<Drawing.PatternFill>();
+        if (pattFill != null)
+            return PatternFillToCss(pattFill, themeColors) + ";";
+
         return "";
     }
 

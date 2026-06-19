@@ -437,7 +437,8 @@ public partial class PowerPointHandler
         // bleed across decorative buttons.
         var hasFillBg = shape.ShapeProperties?.GetFirstChild<Drawing.SolidFill>() != null
             || shape.ShapeProperties?.GetFirstChild<Drawing.GradientFill>() != null
-            || shape.ShapeProperties?.GetFirstChild<Drawing.BlipFill>() != null;
+            || shape.ShapeProperties?.GetFirstChild<Drawing.BlipFill>() != null
+            || shape.ShapeProperties?.GetFirstChild<Drawing.PatternFill>() != null;
         var explicitNoAutofit = bodyPr?.GetFirstChild<Drawing.NoAutoFit>() != null;
         var allowOverflow = wrapNone || explicitNoAutofit;
         var shapeClass = hasFillBg && !allowOverflow ? "shape has-fill" : "shape";

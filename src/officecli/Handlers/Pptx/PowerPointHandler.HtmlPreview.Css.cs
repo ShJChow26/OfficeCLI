@@ -101,18 +101,34 @@ public partial class PowerPointHandler
         // Map preset family → gradient angle(s). Diagonal patterns use 45deg,
         // horizontal use 0deg, vertical 90deg, grid/cross layer both.
         var p = (preset ?? "").ToLowerInvariant();
-        bool isGrid = p.Contains("grid") || p.Contains("cross") || p.Contains("checker") || p.Contains("weave");
+        // Diagonal-cross presets render the × (45deg + 135deg): diagCross plus the
+        // checkerboard presets (smCheck/lgCheck). Orthogonal-grid presets render
+        // the + (0deg + 90deg): plain cross (without "diag"), grid, weave, trellis.
+        bool isDiagCross = p.Contains("diagcross") || p.Contains("check");
+        bool isOrthoGrid = (p.Contains("cross") && !p.Contains("diag"))
+            || p.Contains("grid") || p.Contains("weave") || p.Contains("trellis");
+        bool isGrid = isDiagCross || isOrthoGrid;
         bool isHorz = p.Contains("horz");
         bool isVert = p.Contains("vert");
-        var angle = isHorz ? "0deg" : isVert ? "90deg" : "45deg";
+        // Down-diagonal presets (ltDnDiag/dkDnDiag/wdDnDiag/dashDnDiag) draw `\`
+        // (135deg); up-diagonal draws `/` (45deg). "dn" is the down marker.
+        bool isDnDiag = p.Contains("dndiag") || (p.Contains("dn") && p.Contains("diag"));
+        var diagAngle = isDnDiag ? "135deg" : "45deg";
+        var angle = isHorz ? "0deg" : isVert ? "90deg" : diagAngle;
+        // Base angle for a grid: orthogonal grids start at 0deg, diagonal crosses
+        // at 45deg (down-diagonal grids would start at 135deg if any existed).
+        if (isOrthoGrid) angle = "0deg";
+        else if (isDiagCross) angle = "45deg";
 
         // 4px band: 2px fg line over 2px bg gap.
         var stripe = $"repeating-linear-gradient({angle},{fg} 0,{fg} 2px,{bg} 2px,{bg} 4px)";
         if (isGrid)
         {
             // Layer a perpendicular stripe to form a grid; comma-separated
-            // backgrounds stack (first on top).
-            var cross = $"repeating-linear-gradient({(isHorz ? "90deg" : "135deg")},{fg} 0,{fg} 2px,transparent 2px,transparent 4px)";
+            // backgrounds stack (first on top). Orthogonal grid pairs 0deg+90deg,
+            // diagonal cross pairs 45deg+135deg.
+            var crossAngle = isOrthoGrid ? "90deg" : "135deg";
+            var cross = $"repeating-linear-gradient({crossAngle},{fg} 0,{fg} 2px,transparent 2px,transparent 4px)";
             return $"background:{cross},{stripe}";
         }
         return $"background:{stripe}";
@@ -126,9 +142,11 @@ public partial class PowerPointHandler
     {
         if (wrapper == null) return null;
 
-        var rgb = wrapper.GetFirstChild<Drawing.RgbColorModelHex>()?.Val?.Value;
+        var rgbEl = wrapper.GetFirstChild<Drawing.RgbColorModelHex>();
+        var rgb = rgbEl?.Val?.Value;
         if (rgb != null && rgb.Length >= 6 && rgb[..6].All(char.IsAsciiHexDigit))
-            return $"#{rgb[..6]}";
+            // Apply lumMod/lumOff/tint/shade transforms (same as schemeClr path).
+            return ApplyRgbColorTransforms(rgb[..6], rgbEl!);
 
         var schemeColor = wrapper.GetFirstChild<Drawing.SchemeColor>();
         if (schemeColor?.Val?.HasValue == true)
