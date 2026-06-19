@@ -1761,6 +1761,43 @@ public partial class PowerPointHandler
         return null;
     }
 
+    /// <summary>
+    /// Resolve a color from a <c>&lt;a:buClr&gt;</c> (CT_Color) element, whose color
+    /// child (<c>srgbClr</c>/<c>schemeClr</c>) sits directly inside it rather than
+    /// being wrapped in <c>&lt;a:solidFill&gt;</c>. Honours lumMod/lumOff/tint/shade/alpha
+    /// transforms via the same helpers as ResolveFillColor.
+    /// </summary>
+    private static string? ResolveBulletColor(Drawing.BulletColor? buClr, Dictionary<string, string> themeColors)
+    {
+        if (buClr == null) return null;
+
+        var rgbEl = buClr.GetFirstChild<Drawing.RgbColorModelHex>();
+        var rgb = rgbEl?.Val?.Value;
+        if (rgbEl != null && rgb != null && rgb.Length >= 6 && rgb[..6].All(char.IsAsciiHexDigit))
+        {
+            var hexPart = rgb[..6];
+            var transformed = ApplyRgbColorTransforms(hexPart, rgbEl);
+            hexPart = transformed.StartsWith('#') ? transformed[1..] : transformed;
+            var alpha = rgbEl.GetFirstChild<Drawing.Alpha>()?.Val?.Value;
+            if (alpha.HasValue && alpha.Value < 100000)
+            {
+                var (r, g, b) = ColorMath.HexToRgb(hexPart);
+                return $"rgba({r},{g},{b},{alpha.Value / 100000.0:0.##})";
+            }
+            return $"#{hexPart}";
+        }
+
+        var schemeColor = buClr.GetFirstChild<Drawing.SchemeColor>();
+        if (schemeColor?.Val?.HasValue == true)
+        {
+            var schemeName = schemeColor.Val!.InnerText;
+            if (schemeName != null && themeColors.TryGetValue(schemeName, out var themeHex))
+                return ApplyColorTransforms(themeHex, schemeColor);
+        }
+
+        return null;
+    }
+
     private static string ApplyColorTransforms(string hex, Drawing.SchemeColor schemeColor)
         => ApplyColorTransforms(hex, (OpenXmlElement)schemeColor);
 

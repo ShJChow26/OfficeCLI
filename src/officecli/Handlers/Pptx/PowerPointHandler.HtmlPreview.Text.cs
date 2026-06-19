@@ -321,10 +321,14 @@ public partial class PowerPointHandler
                 if (!string.IsNullOrEmpty(buFontTypeface))
                     buStyles.Add($"font-family:{buFontTypeface}");
 
-                // Bullet color: explicit buClr > first run color > default (inherit)
-                var buClrFill = bulletSource?.GetFirstChild<Drawing.BulletColor>()
-                    ?.GetFirstChild<Drawing.SolidFill>();
-                var bulletColor = ResolveFillColor(buClrFill, themeColors);
+                // Bullet color: explicit buClr > first run color > default (inherit).
+                // <a:buClr> is a CT_Color whose color child (srgbClr/schemeClr) sits
+                // directly inside it — NOT wrapped in <a:solidFill> — so resolve the
+                // child element directly rather than via ResolveFillColor (which
+                // expects a solidFill wrapper). <a:buClrTx/> means "use text color"
+                // and is the implicit default, so absence of buClr falls through.
+                var buClrEl = bulletSource?.GetFirstChild<Drawing.BulletColor>();
+                var bulletColor = ResolveBulletColor(buClrEl, themeColors);
                 if (bulletColor == null)
                 {
                     // Follow first run text color
