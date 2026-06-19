@@ -1502,6 +1502,18 @@ public partial class PowerPointHandler
                 // default stretched <img>; previously tile was ignored and the
                 // image rendered stretched-to-fit.
                 var tile = blipFill?.GetFirstChild<Drawing.Tile>();
+                // R49-02: <a:stretch><a:fillRect l/t/r/b> insets the stretched
+                // image from each edge (1/1000 percent; can be negative=outset).
+                // PowerPoint scales the image into the inner rect, leaving the
+                // border transparent. CSS: background-size = remaining %, and
+                // background-position derived from the l/t vs r/b split.
+                var stretch = blipFill?.GetFirstChild<Drawing.Stretch>();
+                var fillRect = stretch?.FillRectangle;
+                double frL = (fillRect?.Left?.Value ?? 0) / 1000.0;
+                double frT = (fillRect?.Top?.Value ?? 0) / 1000.0;
+                double frR = (fillRect?.Right?.Value ?? 0) / 1000.0;
+                double frB = (fillRect?.Bottom?.Value ?? 0) / 1000.0;
+                var hasFillRectInset = fillRect != null && (frL != 0 || frT != 0 || frR != 0 || frB != 0);
                 // Degenerate crop: L+R >= 100% or T+B >= 100% means zero/negative
                 // visible area. PowerPoint renders nothing in this case; HTML
                 // preview previously averaged the background-image into a muddy
@@ -1513,7 +1525,48 @@ public partial class PowerPointHandler
                 }
                 else if (tile != null)
                 {
-                    sb.Append($"<div style=\"width:100%;height:100%;background-image:url(data:{contentType};base64,{base64});background-repeat:repeat;background-size:auto\"></div>");
+                    // R49-01: honor <a:tile sx/sy> scale + algn. sx/sy are
+                    // ×1000 percent (30000 → 30%) of the image's NATIVE pixel
+                    // size. CSS background-size:30% is 30% of the container, not
+                    // the image, so a percentage cannot reproduce PowerPoint's
+                    // semantics — instead compute pixel dimensions from the
+                    // decoded image's natural size × ratio. When sx/sy are absent
+                    // keep background-size:auto (native size = the 100% default).
+                    var sx = tile.HorizontalRatio?.Value;
+                    var sy = tile.VerticalRatio?.Value;
+                    string bgSize = "auto";
+                    // 100% (or absent) == native size == auto; only a non-100%
+                    // ratio needs an explicit scaled background-size.
+                    var nonDefaultScale = (sx.HasValue && sx.Value != 100000)
+                        || (sy.HasValue && sy.Value != 100000);
+                    if (nonDefaultScale)
+                    {
+                        var nat = OfficeCli.Core.ImageSource.TryGetDimensions(ms);
+                        var sxPct = (sx ?? 100000) / 100000.0;
+                        var syPct = (sy ?? 100000) / 100000.0;
+                        if (nat != null)
+                            bgSize = $"{nat.Value.Width * sxPct:0.##}px {nat.Value.Height * syPct:0.##}px";
+                        else
+                            // No natural size: fall back to percent-of-container
+                            // (approximate, but still distinct from native auto).
+                            bgSize = $"{sxPct * 100:0.##}% {syPct * 100:0.##}%";
+                    }
+                    var bgPos = TileAlignToBackgroundPosition(tile.Alignment);
+                    sb.Append($"<div style=\"width:100%;height:100%;background-image:url(data:{contentType};base64,{base64});background-repeat:repeat;background-position:{bgPos};background-size:{bgSize}\"></div>");
+                }
+                else if (hasFillRectInset)
+                {
+                    // Image occupies the inner rect (100-l-r) × (100-t-b);
+                    // negative insets bleed outside and are clipped by the
+                    // .picture div's overflow. Position by the l vs r ratio.
+                    var sizeW = Math.Max(100.0 - frL - frR, 0.01);
+                    var sizeH = Math.Max(100.0 - frT - frB, 0.01);
+                    var posDenomX = frL + frR;
+                    var posDenomY = frT + frB;
+                    var posX = posDenomX != 0 ? frL / posDenomX * 100.0 : 0.0;
+                    var posY = posDenomY != 0 ? frT / posDenomY * 100.0 : 0.0;
+                    var bgStyle = $"width:100%;height:100%;overflow:hidden;background-image:url(data:{contentType};base64,{base64});background-repeat:no-repeat;background-size:{sizeW:0.##}% {sizeH:0.##}%;background-position:{posX:0.##}% {posY:0.##}%";
+                    sb.Append($"<div style=\"{bgStyle}\"></div>");
                 }
                 else if (hasCrop)
                 {

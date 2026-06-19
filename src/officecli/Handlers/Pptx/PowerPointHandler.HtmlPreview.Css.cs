@@ -42,8 +42,49 @@ public partial class PowerPointHandler
             if (dataUri != null)
             {
                 // R4-4: honor <a:tile> — repeat at native size rather than cover.
-                if (blipFill.GetFirstChild<Drawing.Tile>() != null)
-                    return $"background:url('{dataUri}') repeat;background-size:auto";
+                var tile = blipFill.GetFirstChild<Drawing.Tile>();
+                if (tile != null)
+                {
+                    // R49-01: honor sx/sy scale (×1000 percent of NATIVE pixel
+                    // size) and algn. CSS percentages are container-relative, so
+                    // compute pixel size from the decoded image's natural size.
+                    var sx = tile.HorizontalRatio?.Value;
+                    var sy = tile.VerticalRatio?.Value;
+                    string bgSize = "auto";
+                    var nonDefaultScale = (sx.HasValue && sx.Value != 100000)
+                        || (sy.HasValue && sy.Value != 100000);
+                    if (nonDefaultScale)
+                    {
+                        var nat = TryGetBlipDimensions(blipFill, part);
+                        var sxPct = (sx ?? 100000) / 100000.0;
+                        var syPct = (sy ?? 100000) / 100000.0;
+                        bgSize = nat != null
+                            ? $"{nat.Value.Width * sxPct:0.##}px {nat.Value.Height * syPct:0.##}px"
+                            : $"{sxPct * 100:0.##}% {syPct * 100:0.##}%";
+                    }
+                    var bgPos = TileAlignToBackgroundPosition(tile.Alignment);
+                    return $"background:url('{dataUri}') {bgPos} repeat;background-size:{bgSize}";
+                }
+                // R49-02: honor <a:stretch><a:fillRect> insets — inset the image
+                // from each edge instead of full-cover.
+                var stretch = blipFill.GetFirstChild<Drawing.Stretch>();
+                var fillRect = stretch?.FillRectangle;
+                if (fillRect != null)
+                {
+                    double fl = (fillRect.Left?.Value ?? 0) / 1000.0;
+                    double ft = (fillRect.Top?.Value ?? 0) / 1000.0;
+                    double fr = (fillRect.Right?.Value ?? 0) / 1000.0;
+                    double fb = (fillRect.Bottom?.Value ?? 0) / 1000.0;
+                    if (fl != 0 || ft != 0 || fr != 0 || fb != 0)
+                    {
+                        var sizeW = Math.Max(100.0 - fl - fr, 0.01).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                        var sizeH = Math.Max(100.0 - ft - fb, 0.01).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                        var dX = fl + fr; var dY = ft + fb;
+                        var px = (dX != 0 ? fl / dX * 100.0 : 0.0).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                        var py = (dY != 0 ? ft / dY * 100.0 : 0.0).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                        return $"background:transparent url('{dataUri}') {px}% {py}%/{sizeW}% {sizeH}% no-repeat";
+                    }
+                }
                 // R9-5: honor <a:srcRect> crop insets (l/t/r/b, units of 1/1000%).
                 // Emulate the crop by zooming the background past the box and
                 // shifting its origin so the visible region maps to the kept rect.
@@ -1807,6 +1848,41 @@ public partial class PowerPointHandler
         }
         if (blip.Embed?.HasValue != true) return null;
         return HtmlPreviewHelper.PartToDataUri(part, blip.Embed.Value!);
+    }
+
+    // R49-01: decode a blip's natural pixel dimensions (PNG/JPEG/GIF/BMP) so
+    // tile sx/sy scale can be expressed as image-relative px in CSS.
+    private static (int Width, int Height)? TryGetBlipDimensions(Drawing.BlipFill blipFill, OpenXmlPart part)
+    {
+        var blip = blipFill.GetFirstChild<Drawing.Blip>();
+        if (blip?.Embed?.HasValue != true) return null;
+        try
+        {
+            var imgPart = part.GetPartById(blip.Embed.Value!);
+            using var stream = imgPart.GetStream();
+            using var ms = new MemoryStream();
+            stream.CopyTo(ms);
+            ms.Position = 0;
+            return OfficeCli.Core.ImageSource.TryGetDimensions(ms);
+        }
+        catch { return null; }
+    }
+
+    // R49-01: map <a:tile algn> to a CSS background-position keyword pair.
+    private static string TileAlignToBackgroundPosition(DocumentFormat.OpenXml.EnumValue<Drawing.RectangleAlignmentValues>? algn)
+    {
+        var v = algn?.Value;
+        if (v == null) return "left top";
+        if (v == Drawing.RectangleAlignmentValues.TopLeft) return "left top";
+        if (v == Drawing.RectangleAlignmentValues.Top) return "center top";
+        if (v == Drawing.RectangleAlignmentValues.TopRight) return "right top";
+        if (v == Drawing.RectangleAlignmentValues.Left) return "left center";
+        if (v == Drawing.RectangleAlignmentValues.Center) return "center";
+        if (v == Drawing.RectangleAlignmentValues.Right) return "right center";
+        if (v == Drawing.RectangleAlignmentValues.BottomLeft) return "left bottom";
+        if (v == Drawing.RectangleAlignmentValues.Bottom) return "center bottom";
+        if (v == Drawing.RectangleAlignmentValues.BottomRight) return "right bottom";
+        return "left top";
     }
 
     // ==================== Utility ====================
