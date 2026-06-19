@@ -311,10 +311,21 @@ public partial class PowerPointHandler
             effectFor = ResolveStyleEffectRefList(shape.ShapeStyle, part);
         var shadowCss = EffectListToShadowCss(effectFor, themeColors);
         var glowCss = EffectListToGlowCss(effectFor, themeColors);
-        // Merge multiple filter:drop-shadow into one filter property
+        // Merge multiple filter:drop-shadow into one filter property.
+        // EffectListToShadowCss returns either a "filter:..." value (outer/preset
+        // shadow) or a "box-shadow:inset ..." declaration (innerShdw, which has no
+        // CSS filter equivalent). Route each to the right place: filter values into
+        // filterParts, box-shadow segments into boxShadowParts so a single combined
+        // box-shadow declaration is emitted (CSS only honors the last box-shadow).
         var filterParts = new List<string>();
+        var boxShadowParts = new List<string>();
         if (!string.IsNullOrEmpty(shadowCss))
-            filterParts.Add(shadowCss.Replace("filter:", ""));
+        {
+            if (shadowCss.StartsWith("box-shadow:"))
+                boxShadowParts.Add(shadowCss["box-shadow:".Length..]);
+            else
+                filterParts.Add(shadowCss.Replace("filter:", ""));
+        }
         if (!string.IsNullOrEmpty(glowCss))
             filterParts.Add(glowCss.Replace("filter:", ""));
         if (filterParts.Count > 0)
@@ -351,8 +362,13 @@ public partial class PowerPointHandler
         {
             var bevelW = sp3d.BevelTop.Width?.HasValue == true ? sp3d.BevelTop.Width.Value / EmuConverter.EmuPerPointF : 6; // OOXML default 76200 EMU = 6pt
             var bW = Math.Max(1, bevelW * 0.5);
-            styles.Add($"box-shadow:inset {bW:0.#}px {bW:0.#}px {bW * 1.5:0.#}px rgba(255,255,255,0.25),inset -{bW:0.#}px -{bW:0.#}px {bW * 1.5:0.#}px rgba(0,0,0,0.15)");
+            boxShadowParts.Add($"inset {bW:0.#}px {bW:0.#}px {bW * 1.5:0.#}px rgba(255,255,255,0.25),inset -{bW:0.#}px -{bW:0.#}px {bW * 1.5:0.#}px rgba(0,0,0,0.15)");
         }
+
+        // Emit one combined box-shadow (inner shadow + bevel). CSS only honors the
+        // last box-shadow in an inline style, so they must share a single declaration.
+        if (boxShadowParts.Count > 0)
+            styles.Add($"box-shadow:{string.Join(",", boxShadowParts)}");
 
         // Note: fill opacity (alpha) is already baked into rgba() by ResolveFillColor.
         // Do NOT add a separate CSS opacity here — it would double-apply.
@@ -1283,6 +1299,7 @@ public partial class PowerPointHandler
         }
 
         var filterParts = new List<string>();
+        var boxShadowParts = new List<string>();
         if (picBiLevel != null)
             filterParts.Add("grayscale(1) contrast(1000%)");
         if (duotoneFilter != null)
@@ -1293,8 +1310,15 @@ public partial class PowerPointHandler
         // CSS contrast(1) = no change; +N% contrast → contrast(1 + N/100).
         if (contrastPct.HasValue && Math.Abs(contrastPct.Value) > 0.01)
             filterParts.Add($"contrast({1 + contrastPct.Value / 100.0:0.###})");
+        // innerShdw returns "box-shadow:inset ..." (no CSS filter equivalent); route
+        // it to boxShadowParts. Outer/preset shadow returns a "filter:..." value.
         if (!string.IsNullOrEmpty(shadowCss))
-            filterParts.Add(shadowCss.Replace("filter:", ""));
+        {
+            if (shadowCss.StartsWith("box-shadow:"))
+                boxShadowParts.Add(shadowCss["box-shadow:".Length..]);
+            else
+                filterParts.Add(shadowCss.Replace("filter:", ""));
+        }
         if (!string.IsNullOrEmpty(glowCss))
             filterParts.Add(glowCss.Replace("filter:", ""));
         if (filterParts.Count > 0)
@@ -1328,8 +1352,13 @@ public partial class PowerPointHandler
         {
             var bevelW = picSp3d.BevelTop.Width?.HasValue == true ? picSp3d.BevelTop.Width.Value / EmuConverter.EmuPerPointF : 6;
             var bW = Math.Max(1, bevelW * 0.5);
-            styles.Add($"box-shadow:inset {bW:0.#}px {bW:0.#}px {bW * 1.5:0.#}px rgba(255,255,255,0.25),inset -{bW:0.#}px -{bW:0.#}px {bW * 1.5:0.#}px rgba(0,0,0,0.15)");
+            boxShadowParts.Add($"inset {bW:0.#}px {bW:0.#}px {bW * 1.5:0.#}px rgba(255,255,255,0.25),inset -{bW:0.#}px -{bW:0.#}px {bW * 1.5:0.#}px rgba(0,0,0,0.15)");
         }
+
+        // Emit one combined box-shadow (inner shadow + bevel). CSS only honors the
+        // last box-shadow in an inline style, so they must share a single declaration.
+        if (boxShadowParts.Count > 0)
+            styles.Add($"box-shadow:{string.Join(",", boxShadowParts)}");
 
         // Geometry (rounded corners)
         var presetGeom = pic.ShapeProperties?.GetFirstChild<Drawing.PresetGeometry>();
