@@ -212,7 +212,7 @@
     },
     "start": {
       "type": "int",
-      "description": "starting number for an ordered list (w:start on level 0 of the numbering definition). Only meaningful together with liststyle=ordered or an existing numid. Readback not implemented — w:start lives in the separate numbering part and cross-part traversal is fragile; query the numbering directly if you need it.",
+      "description": "starting number for an ordered list (w:start / w:startOverride on level 0 of the numbering definition). Only meaningful together with liststyle=ordered or an existing numid. NOTE: this applies to the whole numbering instance shared by the paragraph, so setting it on one item of a multi-item list renumbers the entire list (every paragraph that shares the numId), not just that item onward. To restart numbering for a sub-range mid-list, give those paragraphs a fresh numId instead. Readback not implemented — w:start lives in the separate numbering part and cross-part traversal is fragile; query the numbering directly if you need it.",
       "add": true,
       "set": true,
       "get": false,
