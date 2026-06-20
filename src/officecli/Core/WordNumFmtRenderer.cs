@@ -613,9 +613,13 @@ public static class WordNumFmtRenderer
 
     private static string ToRussianAlpha(int n, bool uppercase)
     {
-        if (n < 1 || n > RussianAlphaLower.Length)
-            return n.ToString(CultureInfo.InvariantCulture);
-        var s = RussianAlphaLower[n - 1];
-        return uppercase ? s.ToUpperInvariant() : s;
+        // Same recycling rule as ToAlpha: а,б,…,я,аа,бб,… (repeating letter
+        // past the 28-letter set), with the identical DoS cap of 64 repeats
+        // for adversarial <w:start>.
+        if (n < 1) n = 1;
+        var s = RussianAlphaLower[(n - 1) % RussianAlphaLower.Length];
+        var repeat = Math.Min(((n - 1) / RussianAlphaLower.Length) + 1, 64);
+        var glyph = new string(s[0], repeat);
+        return uppercase ? glyph.ToUpperInvariant() : glyph;
     }
 }
