@@ -325,6 +325,7 @@ public partial class WordHandler
 
         // Track which SdtBlocks we've seen for indexing
         var sdtIndexMap = new Dictionary<SdtBlock, int>();
+        var listCounter = new OrderedListNumberingState();
 
         foreach (var item in bodyElements)
         {
@@ -388,7 +389,12 @@ public partial class WordHandler
                 if (oMathParaChild != null)
                 {
                     var mathText = FormulaParser.ToReadableText(oMathParaChild);
-                    sb.AppendLine($"[{path}] {sdtLabel}[Equation] {mathText}");
+                    // A block-equation paragraph can still be a list item; call
+                    // GetListPrefix so the shared counter advances identically
+                    // across text / annotated / json (off-by-one otherwise) and
+                    // the marker shows on the equation line.
+                    var listPrefix = GetListPrefix(para, listCounter);
+                    sb.AppendLine($"[{path}] {sdtLabel}{listPrefix}[Equation] {mathText}");
                 }
                 else if (para.Descendants<EmbeddedObject>().Any())
                 {
@@ -398,7 +404,7 @@ public partial class WordHandler
                     // EmbeddedObjects in the paragraph — a single paragraph
                     // may contain more than one OLE run. Mirrors
                     // ViewAsAnnotated's word-annotated-ole handling.
-                    var listPrefix = GetListPrefix(para);
+                    var listPrefix = GetListPrefix(para, listCounter);
                     foreach (var embObj in para.Descendants<EmbeddedObject>())
                     {
                         var oleEl = embObj.Descendants()
@@ -419,7 +425,7 @@ public partial class WordHandler
                     var fieldSentinelText = TryGetParagraphTextWithFieldSentinels(para);
                     if (fieldSentinelText != null)
                     {
-                        var listPrefixFs = GetListPrefix(para);
+                        var listPrefixFs = GetListPrefix(para, listCounter);
                         sb.AppendLine($"[{path}] {sdtLabel}{listPrefixFs}{fieldSentinelText}");
                         emitted++;
                         continue;
@@ -432,23 +438,26 @@ public partial class WordHandler
                     if (mathElements.Count > 0 && string.IsNullOrWhiteSpace(GetParagraphText(para)))
                     {
                         var mathText = string.Concat(mathElements.Select(FormulaParser.ToReadableText));
-                        sb.AppendLine($"[{path}] {sdtLabel}[Equation] {mathText}");
+                        // Inline-math-only list item: advance the shared counter
+                        // and show the marker, same as the text/ffield branches.
+                        var listPrefix = GetListPrefix(para, listCounter);
+                        sb.AppendLine($"[{path}] {sdtLabel}{listPrefix}[Equation] {mathText}");
                     }
                     else if (ffText != null)
                     {
-                        var listPrefix = GetListPrefix(para);
+                        var listPrefix = GetListPrefix(para, listCounter);
                         sb.AppendLine($"[{path}] {sdtLabel}{listPrefix}{ffText}");
                     }
                     else if (mathElements.Count > 0)
                     {
                         var text = GetParagraphTextWithMath(para);
-                        var listPrefix = GetListPrefix(para);
+                        var listPrefix = GetListPrefix(para, listCounter);
                         sb.AppendLine($"[{path}] {sdtLabel}{listPrefix}{text}");
                     }
                     else
                     {
                         var text = GetParagraphText(para);
-                        var listPrefix = GetListPrefix(para);
+                        var listPrefix = GetListPrefix(para, listCounter);
                         sb.AppendLine($"[{path}] {sdtLabel}{listPrefix}{text}");
                     }
                 }
@@ -486,6 +495,7 @@ public partial class WordHandler
 
         // Track which SdtBlocks we've seen for indexing
         var sdtIndexMap = new Dictionary<SdtBlock, int>();
+        var listCounter = new OrderedListNumberingState();
 
         foreach (var item in bodyElements)
         {
@@ -543,7 +553,10 @@ public partial class WordHandler
                 if (oMathParaChild != null)
                 {
                     var latex = FormulaParser.ToLatex(oMathParaChild);
-                    sb.AppendLine($"[{path}] [Equation: \"{latex}\"] ← display");
+                    // Block-equation list item: advance the shared counter and
+                    // show the marker so the marker sequence matches view text.
+                    var listPrefixEq = GetListPrefix(para, listCounter);
+                    sb.AppendLine($"[{path}] {listPrefixEq}[Equation: \"{latex}\"] ← display");
                     emitted++;
                     continue;
                 }
@@ -556,7 +569,9 @@ public partial class WordHandler
                 if (inlineMath.Count > 0 && runs.Count == 0)
                 {
                     var latex = string.Concat(inlineMath.Select(FormulaParser.ToLatex));
-                    sb.AppendLine($"[{path}] [Equation: \"{latex}\"] ← {styleName} | inline");
+                    // Inline-math-only list item: advance counter + show marker.
+                    var listPrefixIm = GetListPrefix(para, listCounter);
+                    sb.AppendLine($"[{path}] {listPrefixIm}[Equation: \"{latex}\"] ← {styleName} | inline");
                     emitted++;
                     continue;
                 }
@@ -569,7 +584,7 @@ public partial class WordHandler
                     continue;
                 }
 
-                var listPrefix = GetListPrefix(para);
+                var listPrefix = GetListPrefix(para, listCounter);
 
                 // Build a set of runs that are part of formfield sequences for annotation
                 var formFieldRunMap = BuildFormFieldRunMap(para);
@@ -997,6 +1012,7 @@ public partial class WordHandler
         int emitted = 0;
         var bodyElements = GetBodyElementsWithSdtContext(body).ToList();
         var sdtIndexMap = new Dictionary<SdtBlock, int>();
+        var listCounter = new OrderedListNumberingState();
 
         foreach (var item in bodyElements)
         {
@@ -1055,7 +1071,11 @@ public partial class WordHandler
                 var oMathParaChild = para.ChildElements.FirstOrDefault(e => e.LocalName == "oMathPara" || e is M.Paragraph);
                 if (oMathParaChild != null)
                 {
-                    text = FormulaParser.ToReadableText(oMathParaChild);
+                    // Block-equation list item: advance the shared counter and
+                    // prepend the marker so the json marker sequence matches
+                    // view text / annotated (off-by-one otherwise).
+                    var listPrefixEq = GetListPrefix(para, listCounter);
+                    text = listPrefixEq + FormulaParser.ToReadableText(oMathParaChild);
                     type = "equation";
                 }
                 else
@@ -1065,13 +1085,13 @@ public partial class WordHandler
 
                     var mathElements = FindMathElements(para);
                     if (mathElements.Count > 0 && string.IsNullOrWhiteSpace(GetParagraphText(para)))
-                        text = string.Concat(mathElements.Select(FormulaParser.ToReadableText));
+                        text = GetListPrefix(para, listCounter) + string.Concat(mathElements.Select(FormulaParser.ToReadableText));
                     else if (ffText != null)
-                        text = GetListPrefix(para) + ffText;
+                        text = GetListPrefix(para, listCounter) + ffText;
                     else if (mathElements.Count > 0)
-                        text = GetParagraphTextWithMath(para);
+                        text = GetListPrefix(para, listCounter) + GetParagraphTextWithMath(para);
                     else
-                        text = GetListPrefix(para) + GetParagraphText(para);
+                        text = GetListPrefix(para, listCounter) + GetParagraphText(para);
 
                     if (ffList.Count > 0)
                     {
