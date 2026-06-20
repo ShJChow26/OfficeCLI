@@ -456,8 +456,8 @@ public partial class PowerPointHandler
         // dependent in real PowerPoint:
         //   - text box (<p:cNvSpPr txBox="1">)  → top
         //   - placeholder (<p:ph>)              → inherits from layout/master
-        //                                          (leave at "top" here; the
-        //                                          inheritance path is unchanged)
+        //                                          (resolved below via
+        //                                          ResolveInheritedAnchor)
         //   - autoshape (prstGeom/custGeom, no txBox) → center
         // An explicit <a:bodyPr anchor="t|ctr|b"> always wins.
         var isPlaceholder = shape.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
@@ -473,6 +473,23 @@ public partial class PowerPointHandler
                 "b" => "bottom",
                 _ => "top"
             };
+        }
+        else if (isPlaceholder)
+        {
+            // Slide bodyPr has no explicit anchor: resolve via the standard
+            // slide→layout→master placeholder inheritance (same ph type/idx
+            // matching used for position/font/color). The first ancestor
+            // bodyPr that declares an anchor wins. Absent everywhere → "top".
+            var inheritedAnchor = ResolveInheritedAnchor(shape, part);
+            if (inheritedAnchor != null)
+            {
+                valign = inheritedAnchor switch
+                {
+                    "ctr" => "center",
+                    "b" => "bottom",
+                    _ => "top"
+                };
+            }
         }
 
         // bodyPr/@wrap="none": text does not wrap inside the shape. Combined
@@ -902,6 +919,46 @@ public partial class PowerPointHandler
                     ?.GetFirstChild<PlaceholderShape>();
                 if (candidatePh == null) continue;
                 if (PlaceholderMatches(ph, candidatePh)) return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Resolve the text vertical anchor (<a:bodyPr anchor="…">) for a placeholder
+    /// shape whose own bodyPr declares no anchor, walking the layout then master
+    /// matching placeholder (same ph type/idx matching as ResolveInheritedPosition).
+    /// Returns the first ancestor bodyPr that carries an anchor attribute
+    /// ("t" | "ctr" | "b"), or null if none specify one.
+    /// </summary>
+    private static string? ResolveInheritedAnchor(Shape shape, OpenXmlPart part)
+    {
+        var ph = shape.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
+            ?.GetFirstChild<PlaceholderShape>();
+        if (ph == null) return null;
+
+        var slidePart = part as SlidePart;
+        if (slidePart == null) return null;
+
+        var layoutShapeTree = slidePart.SlideLayoutPart?.SlideLayout?.CommonSlideData?.ShapeTree;
+        var masterShapeTree = slidePart.SlideLayoutPart?.SlideMasterPart?.SlideMaster?.CommonSlideData?.ShapeTree;
+
+        foreach (var tree in new[] { layoutShapeTree, masterShapeTree })
+        {
+            if (tree == null) continue;
+            foreach (var candidate in tree.Elements<Shape>())
+            {
+                var candidatePh = candidate.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties
+                    ?.GetFirstChild<PlaceholderShape>();
+                if (candidatePh == null) continue;
+                if (!PlaceholderMatches(ph, candidatePh)) continue;
+
+                var candBodyPr = candidate.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                if (candBodyPr?.Anchor?.HasValue == true)
+                    return candBodyPr.Anchor.InnerText;
+                // Matched this ancestor but it has no anchor → fall through to
+                // the next ancestor (layout matched but silent → consult master).
             }
         }
 
