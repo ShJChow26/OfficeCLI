@@ -110,6 +110,35 @@ internal partial class ChartSvgRenderer
     // CONSISTENCY(html-encode): shared plain entity-encoder lives in Core/HtmlPreviewHelper.
     public static string HtmlEncode(string text) => HtmlPreviewHelper.HtmlEncode(text);
 
+    /// <summary>Emit a bottom (horizontal) axis tick label &lt;text&gt;, applying an
+    /// SVG rotate transform when <paramref name="rotationDeg"/> is non-null/non-zero
+    /// (degrees, OOXML <c:txPr><a:bodyPr rot> already divided by 60000).
+    ///
+    /// We emit the RAW OOXML angle as the SVG rotate angle (no negation): SVG
+    /// has its Y axis pointing down, which matches what PowerPoint actually
+    /// draws. With PowerPoint's common rot=-45 we anchor the END of the text
+    /// just below the tick (text-anchor="end") and pivot about that point with
+    /// SVG rotate(-45): the left end of the text maps down-left and the text
+    /// reads up-right ("/"), hanging below the axis exactly like PowerPoint.
+    /// For a positive OOXML angle the label trails right (text-anchor="start").
+    /// The anchor y is nudged a few px below the axis baseline so the top-right
+    /// end of the rotated text sits just under the tick. When rotationDeg is
+    /// null/0 the output is byte-for-byte the unrotated centered label
+    /// (regression-safe).</summary>
+    private static void EmitBottomAxisLabel(StringBuilder sb, double x, double y,
+        string color, int fontSize, string label, int? rotationDeg)
+    {
+        var enc = HtmlEncode(label);
+        if (rotationDeg is not int rot || rot == 0)
+        {
+            sb.AppendLine($"        <text x=\"{x:0.#}\" y=\"{y:0.#}\" fill=\"{color}\" font-size=\"{fontSize}\" text-anchor=\"middle\">{enc}</text>");
+            return;
+        }
+        var ay = y + 4;                          // nudge anchor just below the axis
+        var anchor = rot < 0 ? "end" : "start";  // rot<0 trails down-left, reads up-right
+        sb.AppendLine($"        <text x=\"{x:0.#}\" y=\"{ay:0.#}\" fill=\"{color}\" font-size=\"{fontSize}\" text-anchor=\"{anchor}\" transform=\"rotate({rot} {x:0.#} {ay:0.#})\">{enc}</text>");
+    }
+
     public void RenderBarChartSvg(StringBuilder sb, List<(string name, double[] values)> series,
         string[] categories, List<string> colors, int ox, int oy, int pw, int ph,
         bool horizontal, bool stacked = false, bool percentStacked = false,
@@ -119,7 +148,8 @@ internal partial class ChartSvgRenderer
         List<(string Name, double Value, string Color, double WidthPt, string Dash)>? referenceLines = null,
         bool isWaterfall = false, List<ErrorBarInfo?>? errorBars = null,
         bool labelAsPercent = false, string? dataLabelNumFmt = null, int? ooxmlOverlap = null,
-        bool isReversed = false, List<Dictionary<int, string>>? perPointColors = null)
+        bool isReversed = false, List<Dictionary<int, string>>? perPointColors = null,
+        int? catLabelRotationDeg = null, int? valLabelRotationDeg = null)
     {
         // Per-data-point fill override (c:dPt): for series s, category idx c,
         // return the explicit dPt color when present, else the per-series color.
@@ -456,7 +486,7 @@ internal partial class ChartSvgRenderer
                 // Horizontal bars: value axis is HORIZONTAL at the bottom (y=oy+ph).
                 if (TickMarkVisible(ValMajorTickMark))
                     EmitHAxisTick(sb, tx, oy + ph, ValMajorTickMark!);
-                sb.AppendLine($"        <text x=\"{tx:0.#}\" y=\"{oy + ph + 16}\" fill=\"{AxisColor}\" font-size=\"{valFontSize}\" text-anchor=\"middle\">{label}</text>");
+                EmitBottomAxisLabel(sb, tx, oy + ph + 16, AxisColor, valFontSize, label, valLabelRotationDeg);
             }
             // Reference-line overlays: horizontal bars → vertical line at value position on the X (value) axis.
             // For percentStacked charts, the value axis is 0–1 in OOXML but we display 0–100, so scale accordingly.
@@ -683,7 +713,7 @@ internal partial class ChartSvgRenderer
                 // Vertical columns: category axis is HORIZONTAL at the bottom (y=oy+ph).
                 if (TickMarkVisible(CatMajorTickMark))
                     EmitHAxisTick(sb, lx, oy + ph, CatMajorTickMark!);
-                sb.AppendLine($"        <text x=\"{lx:0.#}\" y=\"{oy + ph + 16}\" fill=\"{CatColor}\" font-size=\"{catFontSize}\" text-anchor=\"middle\">{HtmlEncode(label)}</text>");
+                EmitBottomAxisLabel(sb, lx, oy + ph + 16, CatColor, catFontSize, label, catLabelRotationDeg);
             }
             if (ValAxisVisible)
             for (int t = 0; t <= nTicks; t++)
@@ -2324,6 +2354,13 @@ internal partial class ChartSvgRenderer
         public string? ValFontColor { get; set; }
         public int CatFontPx { get; set; } = 9;
         public string? CatFontColor { get; set; }
+        /// <summary>Category-axis tick-label rotation in degrees, read from
+        /// &lt;c:catAx&gt;&lt;c:txPr&gt;&lt;a:bodyPr rot="..."/&gt; (OOXML rot is
+        /// 1/60000 degree). Null = no rotation (labels horizontal, default).</summary>
+        public int? CatAxisLabelRotationDeg { get; set; }
+        /// <summary>Value-axis tick-label rotation in degrees (analogous to
+        /// CatAxisLabelRotationDeg). Null = no rotation.</summary>
+        public int? ValAxisLabelRotationDeg { get; set; }
         public string? ValNumFmt { get; set; }
         /// <summary>Format code from &lt;c:dLbls&gt;&lt;c:numFmt&gt; — applied to data
         /// labels (overrides the value-axis ValNumFmt for label text).</summary>
@@ -2653,6 +2690,7 @@ internal partial class ChartSvgRenderer
             if (valDefRPr?.FontSize?.HasValue == true)
                 info.ValFontPx = (int)(valDefRPr.FontSize.Value / 100.0);
             info.ValFontColor = ExtractFontColor(valDefRPr);
+            info.ValAxisLabelRotationDeg = ExtractAxisLabelRotationDeg(valTxPr);
 
             // Gridline color
             var majorGridlines = valAxis.Elements().FirstOrDefault(e => e.LocalName == "majorGridlines");
@@ -2702,6 +2740,7 @@ internal partial class ChartSvgRenderer
             if (catDefRPr?.FontSize?.HasValue == true)
                 info.CatFontPx = (int)(catDefRPr.FontSize.Value / 100.0);
             info.CatFontColor = ExtractFontColor(catDefRPr);
+            info.CatAxisLabelRotationDeg = ExtractAxisLabelRotationDeg(catTxPr);
         }
 
         // Data label font size
@@ -3157,6 +3196,19 @@ internal partial class ChartSvgRenderer
         return HexOrNull(val);
     }
 
+    /// <summary>Read an axis tick-label rotation (in degrees) from its
+    /// &lt;c:txPr&gt;&lt;a:bodyPr rot="..."/&gt;. OOXML rot is 1/60000 degree.
+    /// Returns null when txPr / bodyPr / rot is absent or rot is 0 (so plain
+    /// charts keep horizontal labels, regression-safe).</summary>
+    private static int? ExtractAxisLabelRotationDeg(OpenXmlElement? txPr)
+    {
+        if (txPr == null) return null;
+        var bodyPr = txPr.Elements().FirstOrDefault(e => e.LocalName == "bodyPr");
+        var rotVal = bodyPr?.GetAttributes().FirstOrDefault(a => a.LocalName == "rot").Value;
+        if (rotVal == null || !int.TryParse(rotVal, out var rot) || rot == 0) return null;
+        return rot / 60000;
+    }
+
     /// <summary>Extract line/outline color from spPr (ln > solidFill > srgbClr).</summary>
     private static string? ExtractLineColor(OpenXmlElement? spPr)
     {
@@ -3266,6 +3318,23 @@ internal partial class ChartSvgRenderer
         // Increase right margin for long axis labels (e.g. "$1,000,000")
         if (!string.IsNullOrEmpty(info.ValNumFmt) && marginRight < 30)
             marginRight = 30;
+
+        // Rotated category labels (catAx txPr bodyPr rot) hang diagonally below
+        // the axis and trail toward the side, so reserve extra bottom (and, for
+        // the leading label, left) space so they aren't clipped. Approximate the
+        // longest label's pixel length, then project it onto the rotation angle.
+        if (info.CatAxisLabelRotationDeg is int catRot && catRot != 0
+            && info.Categories.Length > 0)
+        {
+            var maxLen = info.Categories.Max(c => (c ?? "").Length);
+            var labelPx = maxLen * info.CatFontPx * 0.5;
+            var rad = Math.Abs(catRot) * Math.PI / 180.0;
+            var extraBottom = (int)(labelPx * Math.Sin(rad)) + 4;
+            marginBottom += extraBottom;
+            var extraSide = (int)(labelPx * Math.Cos(rad)) + 4;
+            if (catRot < 0 && marginLeft < extraSide) marginLeft = extraSide;
+            else if (catRot > 0 && marginRight < extraSide) marginRight = extraSide;
+        }
 
         var plotW = svgW - marginLeft - marginRight;
         var plotH = svgH - marginTop - marginBottom;
@@ -3386,7 +3455,8 @@ internal partial class ChartSvgRenderer
                     isHorizontal ? info.PlotFillColor : null, info.ReferenceLines,
                     info.IsWaterfall, info.ErrorBars,
                     info.IsPercent && info.ShowDataLabelPercent && !info.ShowDataLabelVal,
-                    info.DataLabelsNumFmt, info.Overlap, info.IsReversed, info.PerPointColors);
+                    info.DataLabelsNumFmt, info.Overlap, info.IsReversed, info.PerPointColors,
+                    info.CatAxisLabelRotationDeg, info.ValAxisLabelRotationDeg);
         }
 
         // Plot-area border (<c:plotArea><c:spPr><a:ln>). Drawn AFTER the plot
