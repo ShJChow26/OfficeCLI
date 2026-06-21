@@ -2229,6 +2229,31 @@ public partial class PowerPointHandler
         return "clip-path:polygon(" + string.Join(",", pts) + ")";
     }
 
+    // flowChartMagneticTape: the box-inscribed ellipse with a small rectangular tab at the
+    // bottom-right (where the circle meets the baseline). No adjusts. The ellipse is swept
+    // from the bottom (90deg) almost all the way around to ang1=atan2(h,w) past 0deg; then a
+    // horizontal line out to the right edge, down to the bottom-right corner, and back along
+    // the bottom. Was missing (rendered as a rectangle). Verified against real PowerPoint.
+    private static string FlowChartMagneticTapeCss(long widthEmu, long heightEmu)
+    {
+        double w = widthEmu, h = heightEmu;
+        double ang1 = Math.Atan2(h, w) * 180.0 / Math.PI;
+        double ibPct = 50.0 * (1 + Math.Sin(Math.PI / 4));   // ib as % of h
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        var pts = new System.Collections.Generic.List<string>();
+        const int N = 28;
+        double d0 = 90, d1 = 360 + ang1;
+        for (int i = 0; i <= N; i++)
+        {
+            double a = (d0 + (d1 - d0) * i / N) * Math.PI / 180.0;
+            double x = 50 * (1 + Math.Cos(a)), y = 50 * (1 + Math.Sin(a));
+            pts.Add($"{x.ToString("0.##", ci)}% {y.ToString("0.##", ci)}%");
+        }
+        pts.Add($"100% {ibPct.ToString("0.##", ci)}%");
+        pts.Add("100% 100%");
+        return "clip-path:polygon(" + string.Join(",", pts) + ")";
+    }
+
     private static string PresetGeometryToCss(string preset, long widthEmu, long heightEmu,
         Drawing.PresetGeometry? presetGeom)
     {
@@ -2348,6 +2373,8 @@ public partial class PowerPointHandler
             return SwooshArrowPolygon(widthEmu, heightEmu, presetGeom);
         if (preset == "uturnArrow" && widthEmu > 0 && heightEmu > 0)
             return UturnArrowPolygon(widthEmu, heightEmu, presetGeom);
+        if (preset == "flowChartMagneticTape" && widthEmu > 0 && heightEmu > 0)
+            return FlowChartMagneticTapeCss(widthEmu, heightEmu);
         // corner (L-shape): adj1 = bottom (horizontal) arm height %, adj2 = left
         // (vertical) arm width %; both default 50000. Inner corner at (adj2, 100-adj1).
         // The old hardcoded 50/50 ignored both, so a thin-armed L looked fat.
