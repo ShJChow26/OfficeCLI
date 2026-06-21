@@ -706,9 +706,31 @@ internal partial class ChartSvgRenderer
                         if (showDataLabels)
                         {
                             var vlabel = LabelText(rawVal, val);
-                            // Place the label just past the bar's value-end tip.
+                            // Honor <c:dLblPos> for vertical columns. The value-end tip
+                            // is the top edge (by) when the bar grows up, else the bottom
+                            // edge (by+bh); the base edge is the opposite. outEnd places
+                            // the label just past the tip (Office default); inEnd just
+                            // inside the tip; ctr at the bar midpoint; inBase near the
+                            // zero baseline. Without this, inEnd and outEnd were identical.
                             var labelAbove = isReversed ? val < 0 : val >= 0;
-                            var ly = labelAbove ? by - 3 : by + bh + DataLabelFontPx;
+                            var tipY = labelAbove ? by : by + bh;
+                            var baseY = labelAbove ? by + bh : by;
+                            double ly;
+                            switch (DataLabelPos)
+                            {
+                                case "inEnd":
+                                    ly = labelAbove ? tipY + DataLabelFontPx + 1 : tipY - 3;
+                                    break;
+                                case "ctr":
+                                    ly = by + bh / 2 + DataLabelFontPx / 2.0;
+                                    break;
+                                case "inBase":
+                                    ly = labelAbove ? baseY - 3 : baseY + DataLabelFontPx + 1;
+                                    break;
+                                default: // outEnd (Office default)
+                                    ly = labelAbove ? tipY - 3 : tipY + DataLabelFontPx;
+                                    break;
+                            }
                             sb.AppendLine($"        <text class=\"chart-data-label\" x=\"{bx + barW / 2:0.#}\" y=\"{ly:0.#}\" fill=\"{ValueColor}\" font-size=\"{DataLabelFontPx}\" text-anchor=\"middle\">{vlabel}</text>");
                         }
                     }
