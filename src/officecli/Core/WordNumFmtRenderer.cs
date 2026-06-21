@@ -125,15 +125,18 @@ public static class WordNumFmtRenderer
             case "hindicounting":
             case "hindicardinaltext":
                 return ToDevanagariDigits(n);
-            // ECMA-376 §17.18.59 ST_NumberFormat: the canonical value is
-            // "hindiConsonants" (Devanagari consonants क ख ग …); there is no
-            // "hindiLetters" in the schema. Keep "hindiletters" as a tolerant
-            // alias so legacy/typo'd files still render glyphs, not decimal.
+            // Word INVERTS these two relative to their ECMA-376 names (the same
+            // name-vs-glyph mismatch as the korean* formats): the "hindiConsonants"
+            // format actually enumerates the Devanagari VOWELS (अ आ इ …) and
+            // "hindiVowels" enumerates the CONSONANTS (क ख ग …). Map by what Word
+            // renders, not by the literal name. ("hindiLetters" stays a tolerant
+            // alias of hindiConsonants.) Past the glyph set Word doubles — the
+            // exact overflow set is unverified, so the table recycles (deferred).
             case "hindiconsonants":
             case "hindiletters":
-                return ToHindiLetters(n);
-            case "hindivowels":
                 return ToHindiVowels(n);
+            case "hindivowels":
+                return ToHindiLetters(n);
             case "russianlower":
                 return ToRussianAlpha(n, uppercase: false);
             case "russianupper":
@@ -583,11 +586,14 @@ public static class WordNumFmtRenderer
         return letters[(n - 1) % letters.Length].ToString();
     }
 
-    // Devanagari vowels अ, आ, इ, ...
+    // Devanagari independent vowels अ आ इ … औ — the 16 contiguous code points
+    // U+0905..U+0914 (includes the vocalic ऌ and the candra/short ऍ ऎ ऑ ऒ that
+    // Word's enumeration walks in block order).
     private static string ToHindiVowels(int n)
     {
-        char[] vowels = { 'अ','आ','इ','ई','उ','ऊ','ऋ','ए','ऐ','ओ','औ' };
-        return vowels[(n - 1) % vowels.Length].ToString();
+        const int firstVowel = 0x0905; // अ
+        const int vowelCount = 16;     // .. U+0914 (औ)
+        return ((char)(firstVowel + (n - 1) % vowelCount)).ToString();
     }
 
     // Japanese full-width katakana, gojūon (あいうえお) order — 46 glyphs.
