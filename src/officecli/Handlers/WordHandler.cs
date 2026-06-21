@@ -1881,6 +1881,76 @@ public partial class WordHandler : IDocumentHandler
         catch { /* id normalization is best-effort; never block the flush */ }
         try { NormalizeAllRunPropsSchemaOrder(); }
         catch { /* schema-order normalization is best-effort; never block the flush */ }
+        try { EnsureUniqueMoveRunIds(); }
+        catch { /* move-id dedup is best-effort; never block the flush */ }
+    }
+
+    // BUG-DUMP-R71-MOVE-DUP-ID: a move that spans multiple runs/paragraphs
+    // round-trips through per-run `add r revision.type=moveFrom revision.id=X`,
+    // each wrapping its run in a <w:moveFrom w:id="X">; N runs then produce N
+    // MoveFromRun elements all sharing id X. The strict validator rejects
+    // same-type duplicate w:id. The CLI deliberately shares the id within a
+    // move so the Move_{id} range-marker NAME pairs the moveFrom with its moveTo
+    // (see BuildMovePairIdMap / WrapRunAsMoveFrom) — and that pairing rides on
+    // the range-marker name, NOT on the content-run id. So at batch finalization
+    // we can re-assign each MoveFromRun / MoveToRun a unique id (leaving the
+    // range markers and their names untouched) to satisfy validation without
+    // disturbing the move pairing. Word's own files use unique content-run ids
+    // with name-based pairing, so this matches the native shape. Interactive
+    // (non-DeferSave) WrapRunAsMove* is unchanged — this pass runs only here.
+    private void EnsureUniqueMoveRunIds()
+    {
+        var main = _doc.MainDocumentPart;
+        if (main == null) return;
+        IEnumerable<OpenXmlElement?> roots = new OpenXmlElement?[] { main.Document?.Body }
+            .Concat(main.HeaderParts.Select(h => (OpenXmlElement?)h.Header))
+            .Concat(main.FooterParts.Select(f => (OpenXmlElement?)f.Footer))
+            .Append(main.FootnotesPart?.Footnotes)
+            .Append(main.EndnotesPart?.Endnotes);
+        var rootList = roots.Where(r => r != null).Cast<OpenXmlElement>().ToList();
+
+        // Allocate fresh ids above the global max of every move-element w:id in
+        // play so a reassigned move-run id can't collide with another.
+        long next = 0;
+        void TrackMax(string? v) { if (v != null && long.TryParse(v, out var n) && n > next) next = n; }
+        foreach (var root in rootList)
+        {
+            foreach (var e in root.Descendants<MoveFromRun>()) TrackMax(e.Id?.Value);
+            foreach (var e in root.Descendants<MoveToRun>()) TrackMax(e.Id?.Value);
+            foreach (var e in root.Descendants<MoveFromRangeStart>()) TrackMax(e.Id?.Value);
+            foreach (var e in root.Descendants<MoveFromRangeEnd>()) TrackMax(e.Id?.Value);
+            foreach (var e in root.Descendants<MoveToRangeStart>()) TrackMax(e.Id?.Value);
+            foreach (var e in root.Descendants<MoveToRangeEnd>()) TrackMax(e.Id?.Value);
+        }
+
+        // Per-type uniqueness: the validator only flags same-type duplicate w:id,
+        // so an element may share an id with a different-typed move element (one
+        // move's worth is fine) — the fault is N elements of the SAME type all
+        // carrying the collapsed pairing id (N MoveFromRun content wrappers, or
+        // the per-fragment range markers a cross-paragraph span emits). Keep the
+        // first occurrence's id (the lone single-run case is untouched) and
+        // re-stamp the rest. Range-marker w:name is left intact, so the
+        // Move_{id} name pairing — the only thing accept/reject and the dump
+        // round-trip rely on — survives.
+        void DedupById(Func<OpenXmlElement, string?> get, Action<OpenXmlElement, string> set,
+                       Func<OpenXmlElement, bool> match)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var root in rootList)
+                foreach (var el in root.Descendants().Where(match))
+                {
+                    var cur = get(el);
+                    if (string.IsNullOrEmpty(cur)) continue;
+                    if (!seen.Add(cur!))
+                        set(el, (++next).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+        }
+        DedupById(e => (e as MoveFromRun)?.Id?.Value, (e, v) => ((MoveFromRun)e).Id = v, e => e is MoveFromRun);
+        DedupById(e => (e as MoveToRun)?.Id?.Value, (e, v) => ((MoveToRun)e).Id = v, e => e is MoveToRun);
+        DedupById(e => (e as MoveFromRangeStart)?.Id?.Value, (e, v) => ((MoveFromRangeStart)e).Id = v, e => e is MoveFromRangeStart);
+        DedupById(e => (e as MoveFromRangeEnd)?.Id?.Value, (e, v) => ((MoveFromRangeEnd)e).Id = v, e => e is MoveFromRangeEnd);
+        DedupById(e => (e as MoveToRangeStart)?.Id?.Value, (e, v) => ((MoveToRangeStart)e).Id = v, e => e is MoveToRangeStart);
+        DedupById(e => (e as MoveToRangeEnd)?.Id?.Value, (e, v) => ((MoveToRangeEnd)e).Id = v, e => e is MoveToRangeEnd);
     }
 
     // BUG-DUMP-R71-RPR-ORDER: document-wide CT_RPr / CT_ParaRPr child-order
