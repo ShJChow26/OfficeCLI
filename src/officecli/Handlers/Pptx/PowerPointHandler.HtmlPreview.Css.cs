@@ -1677,6 +1677,15 @@ public partial class PowerPointHandler
             var apexPct = Math.Clamp(ReadAdjValueCss(presetGeom, 0, 50000) / 1000.0, 0, 100);
             return $"clip-path:polygon({apexPct:0.##}% 0,100% 100%,0 100%)";
         }
+        // diagStripe: a diagonal band (bottom-left→top-right). adj = stripe width as
+        // a fraction of each axis (default 50000). The band edges run corner-to-corner
+        // and parallel, so a pure-% polygon holds across aspect ratios. Was entirely
+        // missing from the switch → rendered as a solid rectangle.
+        if (preset == "diagStripe")
+        {
+            var adjPct = Math.Clamp(ReadAdjValueCss(presetGeom, 0, 50000) / 1000.0, 0, 100);
+            return $"clip-path:polygon({adjPct:0.##}% 0,100% 0,0 100%,0 {adjPct:0.##}%)";
+        }
         // frame: adj1 = border thickness as a fraction of the shorter side (default
         // 12500 = 12.5%). The border is EQUAL absolute thickness on all sides, so the
         // per-axis percentage differs for non-square shapes; a large adj (e.g. 50000)
