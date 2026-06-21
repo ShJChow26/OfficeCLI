@@ -2104,6 +2104,26 @@ public partial class PowerPointHandler
         return "clip-path:polygon(" + string.Join(",", pts) + ")";
     }
 
+    // pieWedge: a quarter-ellipse wedge. No adjusts. The curved edge is a quarter of the
+    // box-inscribed ellipse centered at the bottom-right corner (radii = full w,h), swept
+    // from the bottom-left corner (180deg) to the top-right corner (270deg); the right and
+    // bottom edges are straight. Was missing from the switch (rendered as a rectangle). The
+    // shape is aspect-independent in %. Verified against real PowerPoint.
+    private static string PieWedgeCss()
+    {
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        var pts = new System.Collections.Generic.List<string>();
+        const int N = 10;
+        for (int i = 0; i <= N; i++)
+        {
+            double a = (180 + 90.0 * i / N) * Math.PI / 180.0;
+            double x = (1 + Math.Cos(a)) * 100, y = (1 + Math.Sin(a)) * 100;
+            pts.Add($"{x.ToString("0.##", ci)}% {y.ToString("0.##", ci)}%");
+        }
+        pts.Add("100% 100%");
+        return "clip-path:polygon(" + string.Join(",", pts) + ")";
+    }
+
     private static string PresetGeometryToCss(string preset, long widthEmu, long heightEmu,
         Drawing.PresetGeometry? presetGeom)
     {
@@ -2215,6 +2235,8 @@ public partial class PowerPointHandler
             return NonIsoscelesTrapezoidPolygon(widthEmu, heightEmu, presetGeom);
         if (preset == "plaque" && widthEmu > 0 && heightEmu > 0)
             return PlaquePolygon(widthEmu, heightEmu, presetGeom);
+        if (preset == "pieWedge")
+            return PieWedgeCss();
         // corner (L-shape): adj1 = bottom (horizontal) arm height %, adj2 = left
         // (vertical) arm width %; both default 50000. Inner corner at (adj2, 100-adj1).
         // The old hardcoded 50/50 ignored both, so a thin-armed L looked fat.
