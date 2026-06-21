@@ -2106,6 +2106,15 @@ public partial class PowerPointHandler
         if (preset == "star24") return StarNPolygon(24, 37500, presetGeom);
         if (preset == "star32") return StarNPolygon(32, 37500, presetGeom);
 
+        // irregularSeal1/2 ("explosion" starbursts): fixed jagged polygons with no
+        // adjusts (hard-coded vertices in the ECMA 21600 grid). Were missing from the
+        // switch → rendered as a plain rectangle. Vertices converted straight from the
+        // ECMA preset definition; verified against real PowerPoint.
+        if (preset == "irregularSeal1")
+            return "clip-path:polygon(50% 26.85%,67.23% 0%,65.53% 24.65%,85.09% 20.63%,77.32% 33.87%,97.67% 37.67%,81.51% 48.5%,100% 61.53%,77.95% 59.92%,84% 83.77%,64.91% 66.93%,61.33% 91.38%,48.76% 69.14%,39.28% 100%,35.72% 72.35%,22.05% 81.56%,26.24% 64.52%,0.62% 67.53%,17.23% 54.51%,0% 39.88%,21.42% 35.26%,1.71% 10.62%,33.85% 29.26%,38.67% 10.62%)";
+        if (preset == "irregularSeal2")
+            return "clip-path:polygon(53.06% 20.1%,68.47% 0%,67.25% 26.75%,83.37% 14.69%,75.83% 30.24%,100% 30.76%,78.63% 43.53%,84.58% 52.27%,75.83% 56.99%,87.39% 72.37%,67.78% 66.44%,69.18% 80.42%,56.39% 73.77%,53.76% 87.23%,45.7% 80.42%,40.28% 91.26%,34.85% 83.91%,22.76% 100%,22.25% 84.44%,5.95% 82.52%,15.42% 71.16%,0% 59.62%,18.22% 53.67%,5.43% 38.29%,24.87% 36.19%,20.84% 16.78%,39.58% 29.55%,45.01% 8.74%)";
+
         // R19 BUG A: parametric quads/polys honoring avLst (slant/notch/inset)
         if (preset == "parallelogram") return ParallelogramPolygon(presetGeom);
         if (preset == "trapezoid") return TrapezoidPolygon(presetGeom);
