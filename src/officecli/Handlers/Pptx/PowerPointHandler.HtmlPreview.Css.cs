@@ -1682,6 +1682,28 @@ public partial class PowerPointHandler
         return $"clip-path:polygon({P(x1)}% {P(y1)}%,{P(x2)}% {P(y1)}%,{P(x2)}% {P(y2)}%,{P(x1)}% {P(y2)}%)";
     }
 
+    // mathPlus: a centered plus/cross. The four arm tips touch the bounding-box
+    // edges (0%/100% on both axes — verified in real PowerPoint). adj1 (default
+    // 23520, pinned to [0,73490]) is the arm half-thickness: an ABSOLUTE length
+    // = ss*adj1/146980 (ss = shorter side), so adj1=73490 fills the box solid.
+    // The old literal hardcoded the arm notch at 33%/67% and ignored adj1 entirely.
+    // Arm-thickness law verified empirically across adj1 in {10000,23520,50000,73490}.
+    private static string MathPlusCss(long widthEmu, long heightEmu, Drawing.PresetGeometry? presetGeom)
+    {
+        var a1 = Math.Clamp(ReadAdjValueCss(presetGeom, 0, 23520), 0, 73490);
+        double ss = Math.Min(widthEmu, heightEmu);
+        double armAbs = ss * a1 / 146980.0;            // arm half-thickness, EMU
+        double hx = armAbs / widthEmu * 100.0;          // as % of width
+        double hy = armAbs / heightEmu * 100.0;         // as % of height
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        string P(double d) => d.ToString("0.##", ci);
+        double xl = 50 - hx, xr = 50 + hx, yt = 50 - hy, yb = 50 + hy;
+        return "clip-path:polygon("
+             + $"{P(xl)}% 0,{P(xr)}% 0,{P(xr)}% {P(yt)}%,100% {P(yt)}%,100% {P(yb)}%,"
+             + $"{P(xr)}% {P(yb)}%,{P(xr)}% 100%,{P(xl)}% 100%,{P(xl)}% {P(yb)}%,"
+             + $"0 {P(yb)}%,0 {P(yt)}%,{P(xl)}% {P(yt)}%)";
+    }
+
     private static string PresetGeometryToCss(string preset, long widthEmu, long heightEmu,
         Drawing.PresetGeometry? presetGeom)
     {
@@ -1754,6 +1776,8 @@ public partial class PowerPointHandler
             return OctagonPolygon(widthEmu, heightEmu, presetGeom);
         if (preset == "moon")
             return MoonPolygon(presetGeom);
+        if (preset == "mathPlus" && widthEmu > 0 && heightEmu > 0)
+            return MathPlusCss(widthEmu, heightEmu, presetGeom);
         // corner (L-shape): adj1 = bottom (horizontal) arm height %, adj2 = left
         // (vertical) arm width %; both default 50000. Inner corner at (adj2, 100-adj1).
         // The old hardcoded 50/50 ignored both, so a thin-armed L looked fat.
