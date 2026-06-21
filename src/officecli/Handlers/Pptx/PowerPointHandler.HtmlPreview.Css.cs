@@ -1524,6 +1524,28 @@ public partial class PowerPointHandler
              + $"{P(hx)}% {P(100 - vy)}%,{P(100 - hx)}% {P(100 - vy)}%,{P(100 - hx)}% {P(vy)}%,0 {P(vy)}%)";
     }
 
+    /// <summary>
+    /// notchedRightArrow clip-path honoring avLst. adj1 = tail (shaft) height as a
+    /// fraction of shape height (default 50000); adj2 = arrowhead width as a fraction
+    /// of the shorter side (default 50000). The back-edge notch mirrors the
+    /// arrowhead slope: its tip x = headWidthX% * (tail-height fraction). The old
+    /// hardcoded polygon ignored both adj.
+    /// </summary>
+    private static string NotchedRightArrowPolygon(long widthEmu, long heightEmu, Drawing.PresetGeometry? presetGeom)
+    {
+        var adj1 = Math.Clamp(ReadAdjValueCss(presetGeom, 0, 50000), 0, 100000);
+        var adj2 = Math.Clamp(ReadAdjValueCss(presetGeom, 1, 50000), 0, 100000);
+        var minSide = Math.Min(widthEmu, heightEmu);
+        var headWidthX = widthEmu > 0 ? Math.Clamp((double)adj2 / 100000.0 * minSide / widthEmu * 100.0, 0, 100) : 50.0;
+        var headStartX = 100 - headWidthX;
+        var tailTop = (100 - adj1 / 1000.0) / 2.0;
+        var tailBottom = 100 - tailTop;
+        var notchX = headWidthX * adj1 / 100000.0;
+        string P(double d) => d.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        return $"clip-path:polygon(0 {P(tailTop)}%,{P(headStartX)}% {P(tailTop)}%,{P(headStartX)}% 0,"
+             + $"100% 50%,{P(headStartX)}% 100%,{P(headStartX)}% {P(tailBottom)}%,0 {P(tailBottom)}%,{P(notchX)}% 50%)";
+    }
+
     private static string PresetGeometryToCss(string preset, long widthEmu, long heightEmu,
         Drawing.PresetGeometry? presetGeom)
     {
@@ -1575,6 +1597,8 @@ public partial class PowerPointHandler
         // collapses the hole to a solid rectangle. The old hardcoded 12%/12% ignored adj.
         if (preset == "frame")
             return FramePolygon(widthEmu, heightEmu, presetGeom);
+        if (preset == "notchedRightArrow")
+            return NotchedRightArrowPolygon(widthEmu, heightEmu, presetGeom);
         // corner (L-shape): adj1 = bottom (horizontal) arm height %, adj2 = left
         // (vertical) arm width %; both default 50000. Inner corner at (adj2, 100-adj1).
         // The old hardcoded 50/50 ignored both, so a thin-armed L looked fat.
@@ -1713,7 +1737,6 @@ public partial class PowerPointHandler
             "rightArrow" => "clip-path:polygon(0 20%,70% 20%,70% 0,100% 50%,70% 100%,70% 80%,0 80%)",
             "leftRightArrow" => "clip-path:polygon(0 50%,15% 20%,15% 35%,85% 35%,85% 20%,100% 50%,85% 80%,85% 65%,15% 65%,15% 80%)",
             "upDownArrow" => "clip-path:polygon(50% 0,80% 15%,65% 15%,65% 85%,80% 85%,50% 100%,20% 85%,35% 85%,35% 15%,20% 15%)",
-            "notchedRightArrow" => "clip-path:polygon(0 25%,70% 25%,70% 0,100% 50%,70% 100%,70% 75%,0 75%,10% 50%)",
             "bentArrow" => "clip-path:polygon(0 20%,60% 20%,60% 0,100% 35%,60% 70%,60% 50%,20% 50%,20% 100%,0 100%)",
             "chevron" => "clip-path:polygon(0 0,80% 0,100% 50%,80% 100%,0 100%,20% 50%)",
             "stripedRightArrow" => "clip-path:polygon(10% 20%,12% 20%,12% 80%,10% 80%,10% 20%,15% 20%,70% 20%,70% 0,100% 50%,70% 100%,70% 80%,15% 80%)",
