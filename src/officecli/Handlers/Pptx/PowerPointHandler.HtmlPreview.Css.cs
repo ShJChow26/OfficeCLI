@@ -1505,6 +1505,25 @@ public partial class PowerPointHandler
              + $"mask-image:radial-gradient(circle,transparent {stop},black {stop})";
     }
 
+    /// <summary>
+    /// Picture-frame clip-path honoring OOXML avLst. adj1 = border thickness as a
+    /// fraction of the shorter side (default 12500 = 12.5%). The border is equal
+    /// absolute thickness on all sides, so the per-axis % differs for non-square
+    /// shapes; adj1 large enough (inset >= 50% of a side) collapses the hole to a
+    /// solid rectangle — matching PowerPoint.
+    /// </summary>
+    private static string FramePolygon(long widthEmu, long heightEmu, Drawing.PresetGeometry? presetGeom)
+    {
+        var adj1 = ReadAdjValueCss(presetGeom, 0, 12500);
+        var minSide = Math.Min(widthEmu, heightEmu);
+        double insetEmu = minSide * adj1 / 100000.0;
+        var hx = widthEmu > 0 ? Math.Clamp(insetEmu / widthEmu * 100.0, 0, 50) : 12.5;
+        var vy = heightEmu > 0 ? Math.Clamp(insetEmu / heightEmu * 100.0, 0, 50) : 12.5;
+        string P(double d) => d.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        return $"clip-path:polygon(0 0,100% 0,100% 100%,0 100%,0 {P(vy)}%,{P(hx)}% {P(vy)}%,"
+             + $"{P(hx)}% {P(100 - vy)}%,{P(100 - hx)}% {P(100 - vy)}%,{P(100 - hx)}% {P(vy)}%,0 {P(vy)}%)";
+    }
+
     private static string PresetGeometryToCss(string preset, long widthEmu, long heightEmu,
         Drawing.PresetGeometry? presetGeom)
     {
@@ -1550,6 +1569,12 @@ public partial class PowerPointHandler
             var apexPct = Math.Clamp(ReadAdjValueCss(presetGeom, 0, 50000) / 1000.0, 0, 100);
             return $"clip-path:polygon({apexPct:0.##}% 0,100% 100%,0 100%)";
         }
+        // frame: adj1 = border thickness as a fraction of the shorter side (default
+        // 12500 = 12.5%). The border is EQUAL absolute thickness on all sides, so the
+        // per-axis percentage differs for non-square shapes; a large adj (e.g. 50000)
+        // collapses the hole to a solid rectangle. The old hardcoded 12%/12% ignored adj.
+        if (preset == "frame")
+            return FramePolygon(widthEmu, heightEmu, presetGeom);
 
         // Calculate roundRect corner radius from avLst or default (16.667% of shorter side)
         if (preset is "roundRect" or "round1Rect" or "round2SameRect" or "round2DiagRect")
@@ -1710,7 +1735,6 @@ public partial class PowerPointHandler
             "lightningBolt" => "clip-path:polygon(35% 0,55% 35%,100% 30%,45% 55%,80% 100%,25% 60%,0 80%,30% 45%)",
 
             // Misc shapes
-            "frame" => "clip-path:polygon(0 0,100% 0,100% 100%,0 100%,0 12%,12% 12%,12% 88%,88% 88%,88% 12%,0 12%)",
             "donut" => DonutCss(presetGeom),
             "noSmoking" => "border-radius:50%",
             "halfFrame" => "clip-path:polygon(0 0,100% 0,100% 15%,15% 15%,15% 100%,0 100%)",
