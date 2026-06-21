@@ -793,7 +793,7 @@ public partial class PowerPointHandler
             {
                 var rxMatch = System.Text.RegularExpressions.Regex.Match(borderRadiusCss, @"border-radius:([\d.]+)");
                 var rx = rxMatch.Success ? rxMatch.Groups[1].Value : "0";
-                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" rx=\"{rx}\" ry=\"{rx}\" fill=\"none\" stroke=\"{strokeRef}\" stroke-width=\"{bw:0.##}pt\"/>");
+                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" rx=\"{rx}pt\" ry=\"{rx}pt\" fill=\"none\" stroke=\"{strokeRef}\" stroke-width=\"{bw:0.##}pt\"/>");
             }
             sb.Append("</svg>");
         }
@@ -822,7 +822,7 @@ public partial class PowerPointHandler
                 var rxMatch = System.Text.RegularExpressions.Regex.Match(borderRadiusCss, @"border-radius:([\d.]+)");
                 var rx = rxMatch.Success ? rxMatch.Groups[1].Value : "0";
                 sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\">");
-                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" rx=\"{rx}\" ry=\"{rx}\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"{linecap}\"{dashAttr}/>");
+                sb.Append($"<rect x=\"{bw / 2:0.##}pt\" y=\"{bw / 2:0.##}pt\" width=\"calc(100% - {bw:0.##}pt)\" height=\"calc(100% - {bw:0.##}pt)\" rx=\"{rx}pt\" ry=\"{rx}pt\" fill=\"none\" stroke=\"{safeColor}\" stroke-width=\"{bw:0.##}pt\" stroke-linecap=\"{linecap}\"{dashAttr}/>");
                 sb.Append("</svg>");
             }
             else if (presetGeom?.Preset?.InnerText == "ellipse")
