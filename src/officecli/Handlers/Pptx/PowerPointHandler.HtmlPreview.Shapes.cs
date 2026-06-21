@@ -554,9 +554,26 @@ public partial class PowerPointHandler
             if (!string.IsNullOrEmpty(shapeHrefUrl)) outerStyles.Add("cursor:pointer");
             sb.Append($"    <div class=\"{shapeClass}\"{dataPathAttr}{textWarpAttr} style=\"{string.Join(";", outerStyles)}\">");
 
+            // A gradient fill can't be expressed as a single SVG `fill` color
+            // (CssSanitizeColor would reject "linear-gradient(...)" → transparent →
+            // invisible shape). Build a real SVG <linearGradient> def and reference it
+            // via url(#id); degrade to the first stop color if the gradient has <2 stops.
+            var fillGrad = shape.ShapeProperties?.GetFirstChild<Drawing.GradientFill>();
+            string gradFillDef = "";
+            string fillAttr = CssSanitizeColor(svgFill);
+            if (fillGrad != null)
+            {
+                var gid = $"cgg{_markerCounter++}";
+                gradFillDef = BuildSvgLinearGradient(fillGrad, gid, themeColors, out var fs);
+                if (!string.IsNullOrEmpty(gradFillDef)) fillAttr = $"url(#{gid})";
+                else if (!string.IsNullOrEmpty(fs)) fillAttr = CssSanitizeColor(fs);
+            }
+            var drawFill = !string.IsNullOrEmpty(custGeomSvgFillD) && (svgFill != "none" || fillGrad != null);
             sb.Append($"<svg style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\" viewBox=\"0 0 {custGeomSvgW} {custGeomSvgH}\" preserveAspectRatio=\"none\">");
-            if (!string.IsNullOrEmpty(custGeomSvgFillD) && svgFill != "none")
-                sb.Append($"<path d=\"{custGeomSvgFillD}\" fill=\"{CssSanitizeColor(svgFill)}\" fill-rule=\"evenodd\"/>");
+            if (!string.IsNullOrEmpty(gradFillDef))
+                sb.Append($"<defs>{gradFillDef}</defs>");
+            if (drawFill)
+                sb.Append($"<path d=\"{custGeomSvgFillD}\" fill=\"{fillAttr}\" fill-rule=\"evenodd\"/>");
             if (!string.IsNullOrEmpty(custGeomSvgStrokeD) && parsedOutline != null)
             {
                 var (bw, dt, bc, cap, _) = parsedOutline.Value;
