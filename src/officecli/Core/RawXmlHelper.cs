@@ -192,7 +192,19 @@ internal static class RawXmlHelper
                     if (xml == null) throw new ArgumentException("--xml is required for insertafter");
                     RequireParent(node, "insertafter");
                     var afterFragment = ParseFragment(xml, xDoc);
-                    foreach (var el in afterFragment)
+                    // AddAfterSelf inserts immediately after `node`, so calling it
+                    // repeatedly against the SAME anchor REVERSES a multi-element
+                    // fragment (start,end → node,end,start). Iterate in REVERSE and
+                    // keep anchoring to `node`, mirroring insertbefore — each element
+                    // lands right after `node`, yielding source order. (Chaining the
+                    // anchor off the just-added node does NOT work: AddAfterSelf clones
+                    // a parented element, so the loop variable still points at the
+                    // detached fragment node, the chain breaks, and only the first
+                    // element reaches the document — silently dropping the rest of a
+                    // multi-marker fragment, e.g. a second tr-level bookmark.) A
+                    // reversed start/end pair also desynced the id-balancer into
+                    // duplicate bookmark ids.
+                    foreach (var el in afterFragment.AsEnumerable().Reverse())
                         node.AddAfterSelf(el);
                     affected++;
                     break;
