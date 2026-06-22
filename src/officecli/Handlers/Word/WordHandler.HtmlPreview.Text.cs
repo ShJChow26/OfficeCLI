@@ -388,12 +388,39 @@ public partial class WordHandler
         if (rProps.SpecVanish != null && (rProps.SpecVanish.Val == null || rProps.SpecVanish.Val.Value))
             return;
         var style = GetRunInlineCss(rProps, para);
+
+        // Format revision (w:rPrChange) — a tracked formatting change. The
+        // final format is already applied via GetRunInlineCss above; mirror
+        // the ins/del revision marks by adding a restrained format-revision
+        // indicator (dashed underline + author tooltip) so the reader sees
+        // "this run's formatting was changed under track-changes" rather
+        // than just the end result. The <w:rPrChange> element (the SDK's
+        // RunPropertiesChange, which carries the author/date) lives on the
+        // run's own direct rPr (not the style/docDefaults chain) — read it
+        // there. PreviousRunProperties is only its inner snapshot.
+        var rPrChange = run.RunProperties?.GetFirstChild<RunPropertiesChange>();
+        string fmtRevClass = "";
+        string fmtRevTitle = "";
+        if (rPrChange != null)
+        {
+            // text-decoration:underline dashed doesn't collide with the
+            // ins underline / del line-through (different color + dashed
+            // style), and leaves the final font formatting untouched.
+            style = string.IsNullOrEmpty(style)
+                ? "text-decoration:underline dashed #6A1B9A;text-decoration-thickness:1px"
+                : style + ";text-decoration:underline dashed #6A1B9A;text-decoration-thickness:1px";
+            fmtRevClass = " class=\"track-fmt\"";
+            var fmtAuthor = rPrChange.Author?.Value;
+            fmtRevTitle = string.IsNullOrEmpty(fmtAuthor)
+                ? " title=\"Formatting changed\""
+                : $" title=\"Formatted by {HtmlEncodeAttr(fmtAuthor)}\"";
+        }
         var needsSpan = !string.IsNullOrEmpty(style);
 
         // When line-break tracking is active, text is buffered and flushed later
         // with style spans — skip the outer span to avoid double-wrapping
         if (needsSpan && !_ctx.LineBreakEnabled)
-            sb.Append($"<span style=\"{style}\">");
+            sb.Append($"<span{fmtRevClass}{fmtRevTitle} style=\"{style}\">");
 
         foreach (var child in run.ChildElements)
         {
