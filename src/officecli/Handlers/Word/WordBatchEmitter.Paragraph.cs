@@ -3407,6 +3407,22 @@ public static partial class WordBatchEmitter
         // the typed path's host key.
         void BumpSourceTextboxOrdinalForVerbatim()
         {
+            // BUG-DUMP-TBLORDINAL-TEXTBOX: a textbox shipped VERBATIM (raw-set /
+            // inlined-parts carrier) carries its <w:txbxContent> tables WITHOUT
+            // going through EmitTable, so EmitTable's `++TableOrdinalBox` never
+            // fires for them — yet the later `(//w:tbl)[N]` cell raw-set selectors
+            // count ALL tables in document order (including textbox-nested ones).
+            // Leaving the ordinal short made every following table's selector land
+            // N tables early, so a cell-content raw-set targeted the wrong table —
+            // here a tr[57] cell-merge XPath hit a 7-row table and the cell text
+            // was dropped. Bump the ordinal by the shipped XML's table count so the
+            // `(//w:tbl)` numbering stays in lockstep with replay. Mirrors the
+            // EmitSdt carrier's identical adjustment. (Unconditional — any shipped
+            // table must count, regardless of whether the box is Navigation-indexed.)
+            int tblCount = System.Text.RegularExpressions.Regex
+                .Matches(rawXml, "<w:tbl[ >]").Count;
+            if (tblCount > 0) ctx.TableOrdinalBox[0] += tblCount;
+
             bool navigationCountsIt = rawXml.Contains("<w:drawing", StringComparison.Ordinal)
                 && (rawXml.Contains("<wps:txbx", StringComparison.Ordinal)
                     || rawXml.Contains("txBox=\"1\"", StringComparison.Ordinal));
