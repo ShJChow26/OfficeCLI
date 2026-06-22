@@ -1695,11 +1695,19 @@ public partial class WordHandler
             {
                 if (hp.Header == null) continue;
                 if (!HeaderFooterHasContent(hp.Header)) continue;
-                sb.AppendLine($"<div class=\"{cssClass}\">");
                 var savedHost = _ctx.ImageHostPart;
                 _ctx.ImageHostPart = hp;
-                RenderHeaderFooterBody(sb, hp.Header);
+                // Watermark spans are collected separately so they can be
+                // emitted OUTSIDE the .doc-header div — the watermark must
+                // be centered on the whole page (.page is its positioning
+                // ancestor), not pinned inside the narrow header band.
+                var headerBodySb = new StringBuilder();
+                var watermarkSb = new StringBuilder();
+                RenderHeaderFooterBody(headerBodySb, hp.Header, watermarkSb);
                 _ctx.ImageHostPart = savedHost;
+                sb.Append(watermarkSb);
+                sb.AppendLine($"<div class=\"{cssClass}\">");
+                sb.Append(headerBodySb);
                 sb.AppendLine("</div>");
                 break;
             }
@@ -1712,11 +1720,15 @@ public partial class WordHandler
             {
                 if (fp.Footer == null) continue;
                 if (!HeaderFooterHasContent(fp.Footer)) continue;
-                sb.AppendLine($"<div class=\"{cssClass}\">");
                 var savedHost = _ctx.ImageHostPart;
                 _ctx.ImageHostPart = fp;
-                RenderHeaderFooterBody(sb, fp.Footer);
+                var footerBodySb = new StringBuilder();
+                var watermarkSb = new StringBuilder();
+                RenderHeaderFooterBody(footerBodySb, fp.Footer, watermarkSb);
                 _ctx.ImageHostPart = savedHost;
+                sb.Append(watermarkSb);
+                sb.AppendLine($"<div class=\"{cssClass}\">");
+                sb.Append(footerBodySb);
                 sb.AppendLine("</div>");
                 break;
             }
@@ -1751,7 +1763,7 @@ public partial class WordHandler
     /// <summary>Iterate header/footer children in order, rendering paragraphs
     /// and tables. Previously only paragraphs were emitted, dropping layout
     /// tables and image-only paragraphs.</summary>
-    private void RenderHeaderFooterBody(StringBuilder sb, OpenXmlElement hf)
+    private void RenderHeaderFooterBody(StringBuilder sb, OpenXmlElement hf, StringBuilder? watermarkSb = null)
     {
         foreach (var child in hf.ChildElements)
         {
@@ -1759,7 +1771,7 @@ public partial class WordHandler
             // recurse so they render the same as direct paragraph children.
             if (child is SdtBlock sdt && sdt.SdtContentBlock is { } content)
             {
-                RenderHeaderFooterBody(sb, content);
+                RenderHeaderFooterBody(sb, content, watermarkSb);
                 continue;
             }
             if (child is Paragraph para)
@@ -1775,13 +1787,26 @@ public partial class WordHandler
                     var colorCss = string.IsNullOrWhiteSpace(watermarkColor)
                         ? "#d0d0d0"
                         : (watermarkColor!.StartsWith("#") ? watermarkColor : "#" + watermarkColor);
-                    sb.Append($"<span class=\"vml-watermark\" style=\"position:absolute;" +
-                              "top:50%;left:50%;transform:translate(-50%,-50%) rotate(-45deg);" +
-                              $"color:{colorCss};font-size:7em;font-weight:bold;" +
-                              "z-index:0;pointer-events:none;white-space:nowrap;" +
-                              "user-select:none\">");
-                    sb.Append(HtmlEncode(watermarkText));
-                    sb.Append("</span>");
+                    // The watermark must be centered over the whole page, so it
+                    // is wrapped in a full-page layer (position:absolute;inset:0)
+                    // that the caller emits as a direct child of .page — NOT
+                    // inside .doc-header (whose narrow band would pin the
+                    // top:50%/left:50% anchor to the header strip, leaving the
+                    // watermark in the upper-left quadrant). The inner span's
+                    // 50%/50% then resolves against this full-page layer.
+                    var watermarkHtml =
+                        "<div class=\"vml-watermark-layer\" style=\"position:absolute;inset:0;" +
+                        "z-index:0;pointer-events:none\">" +
+                        $"<span class=\"vml-watermark\" style=\"position:absolute;" +
+                        "top:50%;left:50%;transform:translate(-50%,-50%) rotate(-45deg);" +
+                        $"color:{colorCss};font-size:7em;font-weight:bold;" +
+                        "pointer-events:none;white-space:nowrap;user-select:none\">" +
+                        HtmlEncode(watermarkText) +
+                        "</span></div>";
+                    // Prefer the dedicated watermark buffer (emitted outside
+                    // .doc-header); fall back to inline if a caller didn't
+                    // provide one (keeps older call paths working).
+                    (watermarkSb ?? sb).Append(watermarkHtml);
                     continue;
                 }
                 RenderParagraphHtml(sb, para);
@@ -2559,11 +2584,17 @@ public partial class WordHandler
                         && HeaderFooterHasContent(hp.Header))
                     {
                         var sb = new StringBuilder();
-                        sb.Append("<div class=\"doc-header\">");
                         var savedHost = _ctx.ImageHostPart;
                         _ctx.ImageHostPart = hp;
-                        RenderHeaderFooterBody(sb, hp.Header);
+                        // Watermark lifted out of .doc-header so it centers on
+                        // the whole page (see RenderHeaderFooterHtml).
+                        var bodySb = new StringBuilder();
+                        var watermarkSb = new StringBuilder();
+                        RenderHeaderFooterBody(bodySb, hp.Header, watermarkSb);
                         _ctx.ImageHostPart = savedHost;
+                        sb.Append(watermarkSb);
+                        sb.Append("<div class=\"doc-header\">");
+                        sb.Append(bodySb);
                         sb.Append("</div>");
                         html = sb.ToString();
                     }
@@ -2571,11 +2602,15 @@ public partial class WordHandler
                         && HeaderFooterHasContent(fp.Footer))
                     {
                         var sb = new StringBuilder();
-                        sb.Append("<div class=\"doc-footer\">");
                         var savedHost = _ctx.ImageHostPart;
                         _ctx.ImageHostPart = fp;
-                        RenderHeaderFooterBody(sb, fp.Footer);
+                        var bodySb = new StringBuilder();
+                        var watermarkSb = new StringBuilder();
+                        RenderHeaderFooterBody(bodySb, fp.Footer, watermarkSb);
                         _ctx.ImageHostPart = savedHost;
+                        sb.Append(watermarkSb);
+                        sb.Append("<div class=\"doc-footer\">");
+                        sb.Append(bodySb);
                         sb.Append("</div>");
                         html = sb.ToString();
                     }
