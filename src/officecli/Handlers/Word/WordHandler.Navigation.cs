@@ -5915,20 +5915,67 @@ public partial class WordHandler
                 var shd = tcPr.Shading;
                 if (shd != null)
                 {
-                    // BUG-DUMP21-02 / BUG-R2-P3-11: emit only the canonical
-                    // shading.val/.fill/.color sub-keys. Previously also
-                    // emitted a legacy `fill` alias carrying the same value,
-                    // which violated the root CLAUDE.md "one canonical key per
-                    // semantic value" rule and showed up as duplicate output
-                    // for every shaded cell. shading.fill is the canonical key
-                    // (matches the OOXML attribute name).
+                    // The cell help schema declares `fill` as the canonical key
+                    // (set:true get:true, readback "#RRGGBB uppercase, or
+                    // 'gradient'") with shd/shading only as Set-side aliases.
+                    // A solid cell background is <w:shd w:val="clear"|"solid"
+                    // w:fill="RRGGBB"/> — fully expressible as a single `fill`
+                    // value, so emit the canonical key (matches sibling
+                    // color/align/valign round-trip; mirrors the gradient branch
+                    // above which already emits `fill`). The gradient/solidFill
+                    // branch above handles synthetic gradients.
+                    //
+                    // A real pattern shading (w:val = pct*/stripe/cross), a
+                    // separate pattern Color, or theme-linkage attrs cannot be
+                    // collapsed into one solid color — those keep the
+                    // shading.val/.fill/.color/.theme* detail keys (consumed by
+                    // the dump→batch fold in WordBatchEmitter.Filters.cs). When
+                    // shading.* detail is present, ExtractCellOnlyProps drops the
+                    // `fill` alias so they don't double-apply (BUG-DUMP21-02).
+                    //
+                    // <w:shd w:val="clear" w:fill="auto"/> is OOXML's "no
+                    // shading" — emit nothing (matches a cell with no shd).
                     var cShdVal = shd.Val?.InnerText;
                     var cShdFill = shd.Fill?.Value;
                     var cShdColor = shd.Color?.Value;
-                    if (!string.IsNullOrEmpty(cShdVal)) node.Format["shading.val"] = cShdVal;
-                    if (!string.IsNullOrEmpty(cShdFill)) node.Format["shading.fill"] = ParseHelpers.FormatHexColor(cShdFill);
-                    if (!string.IsNullOrEmpty(cShdColor)) node.Format["shading.color"] = ParseHelpers.FormatHexColor(cShdColor);
-                    ReadShadingTheme(shd, node);
+                    bool hasFillColor = !string.IsNullOrEmpty(cShdFill)
+                        && !string.Equals(cShdFill, "auto", StringComparison.OrdinalIgnoreCase);
+                    bool isSolidVal = string.IsNullOrEmpty(cShdVal)
+                        || string.Equals(cShdVal, "clear", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(cShdVal, "solid", StringComparison.OrdinalIgnoreCase);
+                    bool hasPatternColor = !string.IsNullOrEmpty(cShdColor);
+                    bool hasTheme = shd.ThemeFill?.HasValue == true
+                        || shd.ThemeFillShade?.Value != null || shd.ThemeFillTint?.Value != null
+                        || shd.ThemeColor?.HasValue == true
+                        || shd.ThemeShade?.Value != null || shd.ThemeTint?.Value != null;
+
+                    // <w:shd w:val="clear" w:fill="auto"/> (and bare clear/solid
+                    // with no fill color, no pattern color, no theme) is OOXML's
+                    // "no shading" form — emit nothing, identical to a cell with
+                    // no <w:shd> at all (mirrors the batch-emitter
+                    // shadingIsEffectivelyNone skip).
+                    bool effectivelyNone = isSolidVal && !hasFillColor
+                        && !hasPatternColor && !hasTheme;
+
+                    if (effectivelyNone)
+                    {
+                        // intentionally emit no key
+                    }
+                    else if (isSolidVal && hasFillColor && !hasPatternColor && !hasTheme)
+                    {
+                        node.Format["fill"] = ParseHelpers.FormatHexColor(cShdFill);
+                    }
+                    else
+                    {
+                        // Pattern / theme / pattern-color cell: keep the detail
+                        // keys verbatim (unchanged from before — emits shading.fill
+                        // even for the "auto" sentinel so the dump round-trip sees
+                        // the same shape).
+                        if (!string.IsNullOrEmpty(cShdVal)) node.Format["shading.val"] = cShdVal;
+                        if (!string.IsNullOrEmpty(cShdFill)) node.Format["shading.fill"] = ParseHelpers.FormatHexColor(cShdFill);
+                        if (hasPatternColor) node.Format["shading.color"] = ParseHelpers.FormatHexColor(cShdColor);
+                        ReadShadingTheme(shd, node);
+                    }
                 }
             }
             // Width
