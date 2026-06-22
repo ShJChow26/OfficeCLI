@@ -184,7 +184,50 @@ public partial class WordHandler
             }
         }
 
+        // Pattern fill → approximate the hatch with a CSS repeating-linear-gradient
+        // alternating <a:fgClr> and <a:bgClr>. CSS can't reproduce every OOXML
+        // preset (dkHorizontal, diagCross, …) so the angle is chosen from the
+        // preset family (vertical / horizontal / diagonal); the result conveys
+        // "patterned, not empty". Falls back to a solid fgClr when colors are
+        // partially present, never to transparent.
+        var pattFill = spPr.Elements().FirstOrDefault(e => e.LocalName == "pattFill");
+        if (pattFill != null)
+        {
+            var fg = ResolvePatternColor(pattFill.Elements().FirstOrDefault(e => e.LocalName == "fgClr"));
+            var bg = ResolvePatternColor(pattFill.Elements().FirstOrDefault(e => e.LocalName == "bgClr"));
+            var prst = pattFill.GetAttributes().FirstOrDefault(a => a.LocalName == "prst").Value;
+
+            if (fg != null && bg != null)
+            {
+                var angle = prst switch
+                {
+                    var p when p != null && p.Contains("Vertical", StringComparison.OrdinalIgnoreCase) => "90deg",
+                    var p when p != null && p.Contains("Horizontal", StringComparison.OrdinalIgnoreCase) => "0deg",
+                    _ => "45deg", // diagonal / cross / dotted / default
+                };
+                return $"background:repeating-linear-gradient({angle},{fg} 0 3px,{bg} 3px 6px)";
+            }
+            // Partial color info → solid fallback (existence over transparency).
+            if (fg != null) return $"background-color:{fg}";
+            if (bg != null) return $"background-color:{bg}";
+        }
+
         return "";
+    }
+
+    /// <summary>Resolve an a:fgClr/a:bgClr wrapper to a CSS color, or null.</summary>
+    private string? ResolvePatternColor(OpenXmlElement? clr)
+    {
+        if (clr == null) return null;
+        var rgb = clr.Elements().FirstOrDefault(e => e.LocalName == "srgbClr");
+        if (rgb != null)
+        {
+            var val = rgb.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+            if (val != null && IsHexColor(val)) return $"#{val}";
+        }
+        var scheme = clr.Elements().FirstOrDefault(e => e.LocalName == "schemeClr");
+        if (scheme != null) return ResolveSchemeColor(scheme);
+        return null;
     }
 
     private string ResolveShapeBorderCss(OpenXmlElement? spPr)
@@ -209,7 +252,25 @@ public partial class WordHandler
         var w = ln.GetAttributes().FirstOrDefault(a => a.LocalName == "w").Value;
         var widthPx = w != null && long.TryParse(w, out var emu) ? Math.Max(1, emu / EmuConverter.EmuPerPointF) : 1;
 
-        return $"border:{widthPx:0.#}px solid {color ?? "#000"}";
+        var style = ResolveBorderDashStyle(ln);
+        return $"border:{widthPx:0.#}px {style} {color ?? "#000"}";
+    }
+
+    /// <summary>
+    /// Map an a:ln's a:prstDash preset to a CSS border-style. CSS has only
+    /// solid/dashed/dotted; the OOXML dash family collapses accordingly.
+    /// </summary>
+    private static string ResolveBorderDashStyle(OpenXmlElement ln)
+    {
+        var prstDash = ln.Elements().FirstOrDefault(e => e.LocalName == "prstDash");
+        var val = prstDash?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value;
+        return val switch
+        {
+            "dot" or "sysDot" => "dotted",
+            "dash" or "sysDash" or "lgDash"
+                or "dashDot" or "lgDashDot" or "sysDashDot" or "sysDashDotDot" or "lgDashDotDot" => "dashed",
+            _ => "solid", // "solid", null, or unknown
+        };
     }
 
     // ==================== Color Math Helpers ====================
@@ -1475,6 +1536,14 @@ public partial class WordHandler
         // matches the document default — body-level CSS already declares
         // font-family there, so duplicating it on every run span only bloats
         // the HTML and obscures real per-run overrides.
+        // Complex-script slot (cs/csTheme). On the LTR path the primary `font`
+        // above never reads it, so a run that carries a cs face (Arabic / Hebrew
+        // typesetting) for embedded RTL spans dropped that face entirely. Resolve
+        // it separately and append it as a fallback after the primary/Latin faces
+        // so the browser uses it for complex-script glyphs the others lack. LTR
+        // runs only; the RTL path already resolves cs as the primary `font`.
+        var csFont = isRtlRun ? null
+            : (fonts?.ComplexScript?.Value ?? ResolveThemeFont(fonts?.ComplexScriptTheme?.InnerText));
         if (font != null
             && !font.StartsWith("+", StringComparison.Ordinal)
             && !string.Equals(font, ReadDocDefaults().Font, StringComparison.Ordinal))
@@ -1484,9 +1553,40 @@ public partial class WordHandler
             // serif/sans-serif class when neither the primary nor the CJK fallback
             // is installed (matters in headless browsers like Playwright).
             var generic = GenericFontFamily(font);
+            // Latin slot (ascii/hAnsi). When a run carries BOTH a Latin face and a
+            // distinct EastAsia face, Word renders ASCII with the Latin face and
+            // CJK with the EastAsia face. The EA-priority resolution above picked
+            // the EastAsia face as `font`, dropping the Latin one — prepend it so
+            // the browser uses Latin first and falls back to EastAsia (+ its CJK
+            // chain) for glyphs the Latin face lacks. LTR runs only; the RTL path
+            // already resolves CS/Latin and never wants an EastAsia prefix.
+            var latinFont = isRtlRun ? null
+                : (fonts?.Ascii?.Value ?? ResolveThemeFont(fonts?.AsciiTheme?.InnerText)
+                   ?? fonts?.HighAnsi?.Value ?? ResolveThemeFont(fonts?.HighAnsiTheme?.InnerText));
+            var latinPrefix = (latinFont != null
+                && !latinFont.StartsWith("+", StringComparison.Ordinal)
+                && !string.Equals(latinFont, font, StringComparison.Ordinal))
+                ? $"'{CssSanitize(latinFont)}',"
+                : "";
+            var csSuffix = (csFont != null
+                && !csFont.StartsWith("+", StringComparison.Ordinal)
+                && !string.Equals(csFont, font, StringComparison.Ordinal)
+                && !string.Equals(csFont, latinFont, StringComparison.Ordinal))
+                ? $",'{CssSanitize(csFont)}'"
+                : "";
             parts.Add(fallback != null
-                ? $"font-family:'{CssSanitize(font)}',{fallback},{generic}"
-                : $"font-family:'{CssSanitize(font)}',{generic}");
+                ? $"font-family:{latinPrefix}'{CssSanitize(font)}',{fallback}{csSuffix},{generic}"
+                : $"font-family:{latinPrefix}'{CssSanitize(font)}'{csSuffix},{generic}");
+        }
+        else if (csFont != null
+            && !csFont.StartsWith("+", StringComparison.Ordinal)
+            && !string.Equals(csFont, ReadDocDefaults().Font, StringComparison.Ordinal))
+        {
+            // cs-only LTR run (no Latin/EastAsia slot resolved a non-default face):
+            // the complex-script face is the only one declared, so it leads the
+            // stack. Without this the span emitted no font-family at all.
+            var generic = GenericFontFamily(csFont);
+            parts.Add($"font-family:'{CssSanitize(csFont)}',{generic}");
         }
 
         // Size (stored as half-points)
@@ -1702,7 +1802,23 @@ public partial class WordHandler
         // contextual shaping + Unicode BiDi algorithm still apply.
         // bidi-override would force reversal, corrupting Arabic glyph order.
         if (rProps.RightToLeftText != null && (rProps.RightToLeftText.Val == null || rProps.RightToLeftText.Val.Value))
+        {
             parts.Add("direction:rtl;unicode-bidi:embed");
+        }
+        else if (para?.ParagraphProperties?.BiDi is { } paraBiDi
+            && (paraBiDi.Val == null || paraBiDi.Val.Value))
+        {
+            // LTR run inside an RTL paragraph (e.g. "100 USD" embedded in
+            // Arabic): the paragraph's direction:rtl base would let the
+            // browser's BiDi algorithm split a "number space letters"
+            // sequence across the line ("100 ... USD"). unicode-bidi:isolate
+            // pins the LTR run as a single self-contained directional island
+            // so it renders left-to-right as one unit, symmetric to the
+            // embed treatment given to RTL runs above. Only emitted in the
+            // RTL-paragraph context — a plain LTR paragraph needs no extra
+            // direction declaration on its runs.
+            parts.Add("direction:ltr;unicode-bidi:isolate");
+        }
 
         // East Asian emphasis mark (w:em val=dot/comma/circle/underDot)
         // → CSS text-emphasis-style, widely supported (including -webkit- prefix)
@@ -1894,8 +2010,16 @@ public partial class WordHandler
             textShadows.Add("0 1px 0 rgba(0,0,0,.4)");
         }
         if (rProps.Outline != null && (rProps.Outline.Val == null || rProps.Outline.Val.Value))
-            // Hollow/outline text approximation.
+        {
+            // Hollow/outline text: stroke the glyph edge AND make the fill
+            // transparent so the interior shows through (white-centre + edge =
+            // hollow outline, matching Word). Stroke alone only thickened the
+            // glyph, leaving it solid. -webkit-text-fill-color overrides the
+            // fill independently of `color`, which still drives the stroke
+            // (currentColor). Chromium (Playwright preview) honours both.
             parts.Add("-webkit-text-stroke:0.5pt currentColor");
+            parts.Add("-webkit-text-fill-color:transparent");
+        }
 
         if (textShadows.Count > 0)
             parts.Add($"text-shadow:{string.Join(",", textShadows)}");
@@ -2763,12 +2887,18 @@ public partial class WordHandler
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{ background: #f0f0f0; font-family: {font}; color: {dd.Color}; padding: 20px; }}
         .page-wrapper {{ margin: 0 auto 40px; transition: width 0.15s ease, height 0.15s ease; }}
-        .page {{ background: white; margin: 0 auto; padding: {mT} {mR} {mB} {mL};
+        .page {{ margin: 0 auto; padding: {mT} {mR} {mB} {mL};
             box-shadow: 0 2px 8px rgba(0,0,0,0.15); border-radius: 4px;
             min-height: {pageH}; line-height: {lh}; font-size: {sz}; position: relative; overflow-x: auto;
             display: flex; flex-direction: column; font-kerning: none; letter-spacing: 0;
             transform-origin: left top; transition: transform 0.15s ease;
             }}
+        /* The white page fill lives on a pseudo-element behind everything so a
+           behind-text float (z-index:-1) paints ON the page, not under it. A
+           background directly on .page would sit at the stacking-context root and
+           hide any negative-z-index child (watermark/behind-doc image). */
+        .page::before {{ content: ""; position: absolute; inset: 0; background: white;
+            border-radius: 4px; z-index: -2; }}
         .page-body {{ flex: 1; display: flex; flex-direction: column; text-autospace: ideograph-alpha ideograph-numeric; overflow-wrap: anywhere; {hyphensCss} }}
         /* Multi-column sections: flex ignores column-count; switch to block. */
         .page-body[style*=""column-count""] {{ display: block; }}
@@ -2805,6 +2935,12 @@ public partial class WordHandler
            flex container so the .dot-leader span (flex:1) stretches and the
            trailing page-number segment lands at the right edge. */
         p.has-leader-tab, div.has-leader-tab {{ display: flex; align-items: baseline; }}
+        /* Three-part Left-tab-Center-tab-Right header/paragraph: the
+           paragraph is a no-wrap flex row and each .atab-band flex-grows to an
+           equal share, text-aligned (left/center/right) per its own tab stop's
+           Val. nowrap keeps all bands on one line (Word never wraps these). */
+        p.has-aligned-tab, div.has-aligned-tab {{ display: flex; align-items: baseline; flex-wrap: nowrap; }}
+        .atab-band {{ flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
         .ptab-spacer {{ flex: 1; min-width: 1em; }}
         ul, ol {{ padding-left: 2em; margin: 0; }}
         ul {{ list-style-type: disc; }}

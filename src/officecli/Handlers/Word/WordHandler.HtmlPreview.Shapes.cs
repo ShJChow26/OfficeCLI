@@ -506,25 +506,35 @@ public partial class WordHandler
         }
 
         // Outer shadow from a:effectLst/a:outerShdw — map to box-shadow
-        var effectLst = spPr.Elements().FirstOrDefault(e => e.LocalName == "effectLst");
-        var outerShdw = effectLst?.Elements().FirstOrDefault(e => e.LocalName == "outerShdw");
-        if (outerShdw != null)
-        {
-            // blurRad, dist, dir (60000ths of a degree) — simplified offset projection
-            var blurAttr = outerShdw.GetAttributes().FirstOrDefault(a => a.LocalName == "blurRad").Value;
-            var distAttr = outerShdw.GetAttributes().FirstOrDefault(a => a.LocalName == "dist").Value;
-            var dirAttr = outerShdw.GetAttributes().FirstOrDefault(a => a.LocalName == "dir").Value;
-            double blurPx = long.TryParse(blurAttr, out var blurEmu) ? blurEmu / EmuConverter.EmuPerPxF : 4;
-            double distPx = long.TryParse(distAttr, out var distEmu) ? distEmu / EmuConverter.EmuPerPxF : 4;
-            double dirDeg = long.TryParse(dirAttr, out var dirVal) ? dirVal / 60000.0 : 45;
-            var offX = distPx * Math.Cos(dirDeg * Math.PI / 180);
-            var offY = distPx * Math.Sin(dirDeg * Math.PI / 180);
-            var shdwFill = outerShdw.Elements().FirstOrDefault(e => e.LocalName == "srgbClr");
-            var shdwHex = shdwFill?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value ?? "000000";
-            parts.Add($"box-shadow:{offX:0.#}px {offY:0.#}px {blurPx:0.#}px #{shdwHex}");
-        }
+        var shadowCss = ResolveOuterShadowCss(spPr);
+        if (!string.IsNullOrEmpty(shadowCss)) parts.Add(shadowCss);
 
         return string.Join(";", parts);
+    }
+
+    /// <summary>
+    /// Map a shape/picture spPr's a:effectLst/a:outerShdw to a CSS box-shadow.
+    /// Returns "" when no outer shadow is present. Shared by the picture path
+    /// and the wps shape style builder so both render drop shadows identically.
+    /// </summary>
+    private static string ResolveOuterShadowCss(OpenXmlElement? spPr)
+    {
+        var effectLst = spPr?.Elements().FirstOrDefault(e => e.LocalName == "effectLst");
+        var outerShdw = effectLst?.Elements().FirstOrDefault(e => e.LocalName == "outerShdw");
+        if (outerShdw == null) return "";
+
+        // blurRad, dist, dir (60000ths of a degree) — simplified offset projection
+        var blurAttr = outerShdw.GetAttributes().FirstOrDefault(a => a.LocalName == "blurRad").Value;
+        var distAttr = outerShdw.GetAttributes().FirstOrDefault(a => a.LocalName == "dist").Value;
+        var dirAttr = outerShdw.GetAttributes().FirstOrDefault(a => a.LocalName == "dir").Value;
+        double blurPx = long.TryParse(blurAttr, out var blurEmu) ? blurEmu / EmuConverter.EmuPerPxF : 4;
+        double distPx = long.TryParse(distAttr, out var distEmu) ? distEmu / EmuConverter.EmuPerPxF : 4;
+        double dirDeg = long.TryParse(dirAttr, out var dirVal) ? dirVal / 60000.0 : 45;
+        var offX = distPx * Math.Cos(dirDeg * Math.PI / 180);
+        var offY = distPx * Math.Sin(dirDeg * Math.PI / 180);
+        var shdwFill = outerShdw.Elements().FirstOrDefault(e => e.LocalName == "srgbClr");
+        var shdwHex = shdwFill?.GetAttributes().FirstOrDefault(a => a.LocalName == "val").Value ?? "000000";
+        return $"box-shadow:{offX:0.#}px {offY:0.#}px {blurPx:0.#}px #{shdwHex}";
     }
 
     /// <summary>
@@ -550,6 +560,13 @@ public partial class WordHandler
     /// <summary>
     /// Render a cropped image using a container div with overflow:hidden.
     /// The image is scaled to its original size and positioned to show only the cropped region.
+    /// The image is absolutely positioned inside the container (NOT a baseline-
+    /// dependent inline element with negative margins): a 128px-tall inline img in
+    /// a 128px container sits on the text baseline, so without a vertical-crop
+    /// margin to pull it back (e.g. cropLeft-only crops where margin-top is 0) it
+    /// is pushed out of the overflow:hidden window and vanishes entirely. Absolute
+    /// positioning ties the offset to the container box, not the line box, so every
+    /// crop combination (symmetric / single-side / mixed) clips correctly.
     /// </summary>
     private static void RenderCroppedImage(StringBuilder sb, string dataUri, long displayWidthPx, long displayHeightPx,
         double cropL, double cropT, double cropR, double cropB, string alt, string extraStyle = "")
@@ -567,10 +584,10 @@ public partial class WordHandler
         var offsetX = -imgW * (cropL / 100.0);
         var offsetY = -imgH * (cropT / 100.0);
 
-        var containerStyle = $"display:inline-block;width:{displayWidthPx}px;height:{displayHeightPx}px;overflow:hidden";
+        var containerStyle = $"position:relative;display:inline-block;width:{displayWidthPx}px;height:{displayHeightPx}px;overflow:hidden";
         if (!string.IsNullOrEmpty(extraStyle)) containerStyle += $";{extraStyle}";
         sb.Append($"<div style=\"{containerStyle}\">");
-        sb.Append($"<img src=\"{dataUri}\" alt=\"{alt}\" style=\"width:{imgW:0}px;height:{imgH:0}px;margin-left:{offsetX:0}px;margin-top:{offsetY:0}px\">");
+        sb.Append($"<img src=\"{dataUri}\" alt=\"{alt}\" style=\"position:absolute;left:{offsetX:0}px;top:{offsetY:0}px;width:{imgW:0}px;height:{imgH:0}px;max-width:none\">");
         sb.Append("</div>");
     }
 
@@ -780,6 +797,12 @@ public partial class WordHandler
             if (!string.IsNullOrEmpty(borderCss)) style += $";{borderCss}";
         }
 
+        // Outer shadow (a:effectLst/a:outerShdw) → box-shadow. Shares the
+        // picture path's projection so wps shapes and pictures drop shadows
+        // identically. Applies to the host div even for svg-overlay presets.
+        var shadowCss = ResolveOuterShadowCss(spPr);
+        if (!string.IsNullOrEmpty(shadowCss)) style += $";{shadowCss}";
+
         // Body properties: text layout + padding
         var bodyPr = shape.Elements().FirstOrDefault(e => e.LocalName == "bodyPr");
         // Vertical text anchor applies to both standalone and positioned shapes
@@ -792,6 +815,26 @@ public partial class WordHandler
         var rIns = GetLongAttr(bodyPr, "rIns", 91440);
         var bIns = GetLongAttr(bodyPr, "bIns", 45720);
         style += $";padding:{tIns / EmuConverter.EmuPerPx}px {rIns / EmuConverter.EmuPerPx}px {bIns / EmuConverter.EmuPerPx}px {lIns / EmuConverter.EmuPerPx}px";
+
+        // Vertical text direction (bodyPr/@vert): rotate text via CSS writing-mode.
+        // OOXML vert values map to writing-mode the same way table-cell tcDir
+        // (Css.cs) and Excel textRotation (ExcelHandler.HtmlPreview.cs) do.
+        // CONSISTENCY(vertical-text): vertical-rl + text-orientation, see sibling renderers.
+        var vert = bodyPr?.GetAttributes().FirstOrDefault(a => a.LocalName == "vert").Value;
+        switch (vert)
+        {
+            case "eaVert":          // East Asian vertical: glyphs upright, columns right→left
+            case "mongolianVert":   // rare; degrade to upright vertical
+                style += ";writing-mode:vertical-rl;text-orientation:upright";
+                break;
+            case "vert":            // Latin rotated 90° CW (glyphs lie on their side)
+                style += ";writing-mode:vertical-rl";
+                break;
+            case "vert270":         // Latin rotated 90° CCW
+                style += ";writing-mode:vertical-rl;transform:rotate(180deg)";
+                break;
+            // "horz", null, or unknown → no writing-mode (stay horizontal)
+        }
 
         sb.Append($"<div style=\"{style}\">");
 

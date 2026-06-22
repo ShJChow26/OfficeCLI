@@ -1465,6 +1465,7 @@ public static partial class WordBatchEmitter
             ParaIdToTargetIdx: null,
             DeferredBookmarks: new List<BatchItem>(),
             TextboxCounters: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
+            SourceTextboxCounters: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
             TableOrdinalBox: new int[1],
             CurrentCellXPathBox: new string?[1],
             CurrentCellPartBox: new string?[1],
@@ -1531,6 +1532,26 @@ public static partial class WordBatchEmitter
             {
                 Command = "remove",
                 Path = $"{partTargetPath}/p[1]",
+            });
+        }
+
+        // BUG-DUMP-HDRFTR-STRUCT-BOOKMARK: re-insert any <w:bookmarkStart>/
+        // <w:bookmarkEnd> that sat at the <w:hdr>/<w:ftr> ROOT level (between block
+        // paragraphs, not inside one). The block walk above only emits paragraph/
+        // table/sdt content, so a header/footer-scoped cross-reference target was
+        // dropped, leaving a dangling REF/PAGEREF. Replay each verbatim at its
+        // source position via raw-set into this part. (Paragraph-level header/footer
+        // bookmarks already survive through EmitParagraph; only root-direct-child
+        // markers need this.)
+        foreach (var (bmXml, relXpath, action) in word.GetPartRootStructuralBookmarks(sourcePath))
+        {
+            items.Add(new BatchItem
+            {
+                Command = "raw-set",
+                Part = hfRawPart,
+                Xpath = relXpath == "." ? hfRootXPath : $"{hfRootXPath}/{relXpath}",
+                Action = action,
+                Xml = bmXml,
             });
         }
     }
@@ -2584,6 +2605,18 @@ public static partial class WordBatchEmitter
                     Action = "insertbefore",
                     Xml = rawXml
                 });
+                // CONSISTENCY(tbl-ordinal): this rich-block-SDT (no external rel)
+                // is shipped verbatim WITHOUT routing its inner <w:tbl> through
+                // EmitTable, so EmitTable's `++TableOrdinalBox` never counts them —
+                // yet the later `(//w:tbl)[N]` cell-SDT/SdtRow/tblGrid raw-set
+                // selectors count ALL tables in document order, including these.
+                // Leaving the ordinal short made every following table's selector
+                // land N tables early, dropping a locked SdtRow + dropdown-bound
+                // cells. Bump by the shipped XML's table count — mirrors the
+                // HasExternalRelRef carrier branch above (and the textbox carrier).
+                if (ctx != null && !string.IsNullOrEmpty(rawXml))
+                    ctx.TableOrdinalBox[0] += System.Text.RegularExpressions.Regex
+                        .Matches(rawXml, "<w:tbl[ >]").Count;
                 return;
             }
         }
@@ -2878,7 +2911,14 @@ public static partial class WordBatchEmitter
             // the SDT round-trips verbatim via raw-set (no rels involved).
             || sdtXml.Contains("<w:br", StringComparison.Ordinal)
             || sdtXml.Contains("<w:tab", StringComparison.Ordinal)
-            || sdtXml.Contains("<w:cr", StringComparison.Ordinal);
+            || sdtXml.Contains("<w:cr", StringComparison.Ordinal)
+            // BUG-DUMP-EQUATION-SDT: an equation content control's math content
+            // (<m:oMath>/<m:oMathPara>) lives in m: runs, not <w:r>, so the run
+            // checks above miss it and the typed path dropped the equation. Treat
+            // math content or the <w:equation/> sdtPr marker as rich → raw-set
+            // verbatim. (Block-level equation SDTs mirror the inline fix.)
+            || sdtXml.Contains("<m:oMath", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:equation", StringComparison.Ordinal);
     }
 
     // Raw injection of an <w:sdt> into the blank target preserves the element

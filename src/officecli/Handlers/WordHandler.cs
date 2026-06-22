@@ -650,6 +650,131 @@ public partial class WordHandler : IDocumentHandler
         return set;
     }
 
+    // BUG-DUMP-TABLE-STRUCT-BOOKMARK: a <w:bookmarkStart>/<w:bookmarkEnd> placed
+    // at TABLE-STRUCTURE level — a direct child of <w:tbl> (between two <w:tr>) or
+    // of <w:tr> (between two <w:tc>) — is valid OOXML and a common cross-reference
+    // target (PAGEREF/REF \h), but the typed `add table` emit only walks rows and
+    // cells, so these markers were dropped on round-trip → dangling references
+    // ("Error! Bookmark not defined."). Return each structural marker's verbatim
+    // OuterXml plus a table-relative xpath + insert action so EmitTable can
+    // re-insert it at its source position via raw-set. Markers inside a cell's
+    // paragraphs (the normal case) are unaffected — they ride the cell emit.
+    internal List<(string Xml, string RelXpath, string Action)> GetTableStructuralBookmarks(string tablePath)
+    {
+        var result = new List<(string, string, string)>();
+        OpenXmlElement? el;
+        try { el = NavigateToElement(ParsePath(tablePath)); }
+        catch { return result; }
+        if (el is not Table tbl) return result;
+
+        // tbl-level markers: direct children of <w:tbl> that are bookmark markers,
+        // positioned relative to the running <w:tr> index.
+        int totalRows = tbl.Elements<TableRow>().Count();
+        int trIdx = 0;
+        foreach (var child in tbl.ChildElements)
+        {
+            if (child is TableRow) { trIdx++; continue; }
+            if (child is BookmarkStart || child is BookmarkEnd)
+            {
+                string rel, action;
+                if (trIdx == 0) { rel = "w:tr[1]"; action = "before"; }       // before first row
+                else if (trIdx < totalRows) { rel = $"w:tr[{trIdx + 1}]"; action = "before"; }
+                else { rel = $"w:tr[{trIdx}]"; action = "after"; }            // after last row
+                result.Add((child.OuterXml, rel, action));
+            }
+        }
+
+        // tr-level markers: direct children of a <w:tr> that are bookmark markers,
+        // positioned relative to the running <w:tc> index within that row.
+        trIdx = 0;
+        foreach (var row in tbl.Elements<TableRow>())
+        {
+            trIdx++;
+            int totalCells = row.Elements<TableCell>().Count();
+            if (totalCells == 0) continue;
+            int tcIdx = 0;
+            foreach (var rc in row.ChildElements)
+            {
+                if (rc is TableCell) { tcIdx++; continue; }
+                if (rc is BookmarkStart || rc is BookmarkEnd)
+                {
+                    string rel, action;
+                    if (tcIdx == 0) { rel = $"w:tr[{trIdx}]/w:tc[1]"; action = "before"; }
+                    else if (tcIdx < totalCells) { rel = $"w:tr[{trIdx}]/w:tc[{tcIdx + 1}]"; action = "before"; }
+                    else { rel = $"w:tr[{trIdx}]/w:tc[{tcIdx}]"; action = "after"; }
+                    result.Add((rc.OuterXml, rel, action));
+                }
+            }
+        }
+        return CoalesceStructuralBookmarks(result);
+    }
+
+    // BUG-DUMP-STRUCT-BOOKMARK-ORDER: two structural markers replayed as separate
+    // raw-set ops at the SAME anchor+action reverse on insert — two "after X" ops
+    // put the second BEFORE the first, so a zero-length bookmark's End lands ahead
+    // of its Start. The bookmark id-balancer then sees an unpaired End + an orphan
+    // Start, closes the orphan with an extra zero-length End, and produces a
+    // DUPLICATE bookmark id (schema-invalid, Word repair-on-open). Merge runs of
+    // consecutive entries that share (RelXpath, Action) into ONE raw-set whose XML
+    // concatenates them in source order, so the pair inserts atomically and stays
+    // ordered Start→End.
+    private static List<(string Xml, string RelXpath, string Action)> CoalesceStructuralBookmarks(
+        List<(string Xml, string RelXpath, string Action)> markers)
+    {
+        if (markers.Count < 2) return markers;
+        var merged = new List<(string Xml, string RelXpath, string Action)>();
+        foreach (var m in markers)
+        {
+            if (merged.Count > 0)
+            {
+                var last = merged[^1];
+                if (string.Equals(last.RelXpath, m.RelXpath, StringComparison.Ordinal)
+                    && string.Equals(last.Action, m.Action, StringComparison.Ordinal))
+                {
+                    merged[^1] = (last.Xml + m.Xml, last.RelXpath, last.Action);
+                    continue;
+                }
+            }
+            merged.Add(m);
+        }
+        return merged;
+    }
+
+    // BUG-DUMP-HDRFTR-STRUCT-BOOKMARK: a <w:bookmarkStart>/<w:bookmarkEnd> that is
+    // a DIRECT child of a <w:hdr>/<w:ftr> root (between block paragraphs/tables, not
+    // inside one) is dropped on round-trip — EmitHeaderFooterPart walks only the
+    // block children (paragraphs/tables/sdts), so a header/footer-scoped
+    // cross-reference target vanishes (header/footer paragraph-level bookmarks
+    // already survive via EmitParagraph). Return each root-level marker's verbatim
+    // OuterXml + a part-root-relative xpath + insert action so the caller replays it
+    // via raw-set. Positioned by paragraph index (the reliable anchor in a hdr/ftr;
+    // structural bookmarks interleaved with tables/sdts are vanishingly rare).
+    internal List<(string Xml, string RelXpath, string Action)> GetPartRootStructuralBookmarks(string partSourcePath)
+    {
+        var result = new List<(string, string, string)>();
+        OpenXmlElement? el;
+        try { el = NavigateToElement(ParsePath(partSourcePath)); }
+        catch { return result; }
+        if (el is not Header && el is not Footer) return result;
+
+        int totalParas = el.Elements<Paragraph>().Count();
+        int pIdx = 0;
+        foreach (var child in el.ChildElements)
+        {
+            if (child is Paragraph) { pIdx++; continue; }
+            if (child is BookmarkStart || child is BookmarkEnd)
+            {
+                string rel, action;
+                if (totalParas == 0) { rel = "."; action = "append"; }        // no paragraph anchor
+                else if (pIdx == 0) { rel = "w:p[1]"; action = "before"; }     // before first paragraph
+                else if (pIdx < totalParas) { rel = $"w:p[{pIdx + 1}]"; action = "before"; }
+                else { rel = $"w:p[{pIdx}]"; action = "after"; }               // after last paragraph
+                result.Add((child.OuterXml, rel, action));
+            }
+        }
+        return CoalesceStructuralBookmarks(result);
+    }
+
     // BUG-DUMP-R72-FF-BOOKMARK-COUNT: per-name occurrence count of source body
     // bookmarks. The form-field noBookmark decision is count-aware, not boolean:
     // a doc with one <w:bookmarkStart name="Check1"> but 26 checkbox fields all
