@@ -1439,6 +1439,17 @@ public partial class WordHandler
                         => fns.Elements<Footnote>().Where(f => f.Id?.Value > 0).Cast<OpenXmlElement>(),
                     "endnote" when current is Endnotes ens
                         => ens.Elements<Endnote>().Where(e => e.Id?.Value > 0).Cast<OpenXmlElement>(),
+                    // BUG-DUMP-FLDSIMPLE-IMG: address the Nth drawing-bearing run INSIDE
+                    // a paragraph's <w:fldSimple> results so the path-based picture
+                    // pipeline (GetElementXml / GetImageBinary / GetDrawingShapeEmitData)
+                    // can ship an image cached in a simple field. (Case label is lower —
+                    // this switch is on seg.Name.ToLowerInvariant().) Order matches the
+                    // fldSimple decomposition in the paragraph emit.
+                    "fldimgrun" when current is Paragraph fldImgPara
+                        => fldImgPara.Elements<SimpleField>()
+                            .SelectMany(f => f.Elements<Run>()
+                                .Where(r => r.GetFirstChild<Drawing>() != null))
+                            .Cast<OpenXmlElement>(),
                     _ => current.ChildElements.Where(e => e.LocalName == seg.Name).Cast<OpenXmlElement>()
                 };
             }
@@ -4885,6 +4896,7 @@ public partial class WordHandler
                 .ToList();
             int bareFieldIdx = 0;
             int fldSimpleMergeIdx = 0;
+            int fldImgRunIdx = 0;   // BUG-DUMP-FLDSIMPLE-IMG: paragraph-scoped, matches the fldimgrun[] selector
             foreach (var entry in ordered)
             {
                 int _childCountBefore = node.Children.Count;
@@ -4895,22 +4907,72 @@ public partial class WordHandler
                     // standalone loop, which is now removed for direct children).
                     var fld = (SimpleField)entry.el;
                     var instr = fld.Instruction?.Value ?? "";
-                    var displayText = string.Join("", fld.Descendants<Text>().Select(t => t.Text));
-                    var fldNode = new DocumentNode
+                    // BUG-DUMP-FLDSIMPLE-IMG: a <w:fldSimple> whose result holds a
+                    // <w:drawing> (e.g. REF SHAPE caching the referenced inline image)
+                    // cannot round-trip through the text-only `field` node below — the
+                    // image was silently dropped. Decompose into a complex field that
+                    // keeps the picture in its result: synthesized begin/instr/separate
+                    // markers (inline raw) + a real picture node (ships the image bytes
+                    // and rebinds the blip rel via the resolvable fldimgrun[] path) + an
+                    // end marker. Mirrors BUG-DUMP-R28-INCLUDEPICTURE for fldChar chains;
+                    // fldSimple already round-trips as a complex field, so it is faithful.
+                    if (fld.Descendants<Drawing>().Any())
                     {
-                        Type = "field",
-                        Text = displayText,
-                        Path = $"{path}/field[{fldSimpleMergeIdx + 1}]",
-                    };
-                    fldNode.Format["instruction"] = instr.Trim();
-                    var instrUpper = instr.Trim().Split(' ', 2)[0].ToUpperInvariant();
-                    if (!string.IsNullOrEmpty(instrUpper))
-                        fldNode.Format["fieldType"] = instrUpper.ToLowerInvariant();
-                    if (fld.Dirty?.Value == true) fldNode.Format["dirty"] = true;
-                    if (fld.FieldLock?.Value == true) fldNode.Format["fldLock"] = true;
-                    fldNode.Format["evaluated"] = displayText.Length > 0;
-                    node.Children.Add(fldNode);
-                    fldSimpleMergeIdx++;
+                        string EscXml(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+                        DocumentNode MarkerNode(string xml) => new DocumentNode
+                        {
+                            Type = "field",
+                            Path = $"{path}/field[{fldSimpleMergeIdx + 1}]",
+                            Format = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                            {
+                                ["_fieldMarkerRaw"] = true,
+                                ["_markerInlineXml"] = xml,
+                            }
+                        };
+                        node.Children.Add(MarkerNode(
+                            "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+                            + "<w:r><w:instrText xml:space=\"preserve\">" + EscXml(instr) + "</w:instrText></w:r>"
+                            + "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"));
+                        var pendingRaw = new System.Text.StringBuilder();
+                        void FlushRaw()
+                        {
+                            if (pendingRaw.Length == 0) return;
+                            node.Children.Add(MarkerNode(pendingRaw.ToString()));
+                            pendingRaw.Clear();
+                        }
+                        foreach (var rr in fld.Elements<Run>())
+                        {
+                            var rd = rr.GetFirstChild<Drawing>();
+                            if (rd != null)
+                            {
+                                FlushRaw();
+                                node.Children.Add(CreateImageNode(rd, rr, $"{path}/fldimgrun[{++fldImgRunIdx}]"));
+                            }
+                            else pendingRaw.Append(rr.OuterXml);
+                        }
+                        FlushRaw();
+                        node.Children.Add(MarkerNode("<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>"));
+                        fldSimpleMergeIdx++;
+                    }
+                    else
+                    {
+                        var displayText = string.Join("", fld.Descendants<Text>().Select(t => t.Text));
+                        var fldNode = new DocumentNode
+                        {
+                            Type = "field",
+                            Text = displayText,
+                            Path = $"{path}/field[{fldSimpleMergeIdx + 1}]",
+                        };
+                        fldNode.Format["instruction"] = instr.Trim();
+                        var instrUpper = instr.Trim().Split(' ', 2)[0].ToUpperInvariant();
+                        if (!string.IsNullOrEmpty(instrUpper))
+                            fldNode.Format["fieldType"] = instrUpper.ToLowerInvariant();
+                        if (fld.Dirty?.Value == true) fldNode.Format["dirty"] = true;
+                        if (fld.FieldLock?.Value == true) fldNode.Format["fldLock"] = true;
+                        fldNode.Format["evaluated"] = displayText.Length > 0;
+                        node.Children.Add(fldNode);
+                        fldSimpleMergeIdx++;
+                    }
                 }
                 else if (entry.kind == "run")
                 {

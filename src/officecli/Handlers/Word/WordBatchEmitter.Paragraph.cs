@@ -2145,6 +2145,23 @@ public static partial class WordBatchEmitter
         // produced. The markers carry no relationships, so the append is safe.
         if (run.Format.TryGetValue("_fieldMarkerRaw", out var fmr) && fmr is bool fmrB && fmrB)
         {
+            // BUG-DUMP-FLDSIMPLE-IMG: a fldSimple decomposed into a complex field
+            // carries synthesized begin/instr/separate/end fldChar markers as inline
+            // raw XML (no source slice paths exist for them). Append that verbatim.
+            if (run.Format.TryGetValue("_markerInlineXml", out var mixObj)
+                && mixObj is string mix && !string.IsNullOrEmpty(mix)
+                && ResolveRawSetHost(parentPath, ctx) is { } inlineHost)
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "raw-set",
+                    Part = inlineHost.Part,
+                    Xpath = inlineHost.XPath,
+                    Action = "append",
+                    Xml = mix
+                });
+                return true;
+            }
             var markerPaths = run.Format.TryGetValue("_markerSlicePaths", out var mspObj)
                 ? mspObj as List<string> : null;
             if (markerPaths is { Count: > 0 } && ResolveRawSetHost(parentPath, ctx) is { } markerHost)
