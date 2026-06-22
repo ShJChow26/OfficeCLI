@@ -2541,7 +2541,10 @@ public partial class WordHandler
             else if (element is Table table)
             {
                 CloseAllLists(sb, listStack, ref currentListType, ref pendingLiClose);
-                RenderTableHtml(sb, table, dataPath: $"/body/table[{wTableCount}]");
+                // Thread the body walk's ordered-list counter so a table cell's
+                // <ol> continues document-flow numbering (Word advances the
+                // counter through table paragraphs too). (CONSISTENCY(list-marker))
+                RenderTableHtml(sb, table, dataPath: $"/body/table[{wTableCount}]", olState: olState);
             }
             else if (element is AltChunk altChunk)
             {

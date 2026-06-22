@@ -17,8 +17,15 @@ public partial class WordHandler
 {
     // ==================== Table Rendering ====================
 
-    private void RenderTableHtml(StringBuilder sb, Table table, string? dataPath = null, int depth = 0)
+    // olState threads the body walk's shared ordered-list counter into cell
+    // list items so a cell's <ol> continues the document-flow numbering instead
+    // of restarting at the level start. Null at isolated content roots
+    // (header/footer/footnote/textbox) — those pass a fresh per-table state so
+    // multi-item cell lists still advance 1./2./3. within the root, without
+    // crossing into the body counter. (CONSISTENCY(list-marker))
+    private void RenderTableHtml(StringBuilder sb, Table table, string? dataPath = null, int depth = 0, OrderedListNumberingState? olState = null)
     {
+        olState ??= new OrderedListNumberingState();
         // CONSISTENCY(dos-hardening): nested-table recursion has no structural
         // bound; a crafted deeply-nested table would overflow the stack
         // (uncatchable crash) during `view html`. See DocumentLimits.
@@ -406,7 +413,7 @@ public partial class WordHandler
                         var listStyle = GetParagraphListStyle(cellPara);
                         if (listStyle != null)
                         {
-                            RenderCellListItem(sb, cellPara, listStyle, ref cellListTag);
+                            RenderCellListItem(sb, cellPara, listStyle, ref cellListTag, olState);
                             continue;
                         }
                         CloseCellList();
@@ -425,7 +432,7 @@ public partial class WordHandler
                     else if (child is Table nestedTable)
                     {
                         CloseCellList();
-                        RenderTableHtml(sb, nestedTable, depth: depth + 1);
+                        RenderTableHtml(sb, nestedTable, depth: depth + 1, olState: olState);
                     }
                 }
                 CloseCellList();
@@ -685,7 +692,7 @@ public partial class WordHandler
     /// nesting inside a cell collapses to one level (a known simplification;
     /// body-level lists remain the full-fidelity path).
     /// </summary>
-    private void RenderCellListItem(StringBuilder sb, Paragraph para, string listStyle, ref string? cellListTag)
+    private void RenderCellListItem(StringBuilder sb, Paragraph para, string listStyle, ref string? cellListTag, OrderedListNumberingState olState)
     {
         var resolvedNumPr = ResolveNumPrFromStyle(para);
         var ilvl = resolvedNumPr?.Ilvl ?? 0;
@@ -734,13 +741,12 @@ public partial class WordHandler
         var paraStyle = GetParagraphInlineCss(para, isListItem: true);
         if (tag == "ol")
         {
-            var template = string.IsNullOrEmpty(lvlText) ? $"%{ilvl + 1}" : lvlText!;
-            var counter = (GetStartValue(numId, ilvl) ?? 1);
-            var marker = System.Text.RegularExpressions.Regex.Replace(template, @"%(\d)", m =>
-            {
-                var lvlFmt = GetNumberingFormat(numId, ilvl);
-                return OfficeCli.Core.WordNumFmtRenderer.Render(counter, lvlFmt);
-            });
+            // Advance + render through the shared ordered-list engine (same as
+            // the body walk) so a cell's list continues document-flow numbering
+            // 1./2./3. instead of restarting at the level start on every item.
+            var seedAbsId = GetAbstractNumId(numId);
+            AdvanceOrderedCounter(olState, numId, seedAbsId, ilvl);
+            var marker = RenderOrderedMarker(olState, numId, ilvl, lvlText);
             var suff = GetLevelSuffix(numId, ilvl);
             var jc = GetLevelJustification(numId, ilvl);
             var markerWidth = hangingPt > 0 ? $"{hangingPt:0.#}pt" : "3em";
