@@ -559,8 +559,15 @@ public partial class WordHandler
                 if (ciProps.TryGetValue("default", out var defaultVal))
                 {
                     textInput.AppendChild(new DefaultTextBoxFormFieldString { Val = defaultVal });
-                    // Use default value as initial text if no explicit text/value provided
-                    if (string.IsNullOrEmpty(text))
+                    // Use the default as the initial result text only for an
+                    // INTERACTIVE create with no text supplied. BUG-DUMP-FORMTEXT-
+                    // DEFAULT: when the dump pinned text="" (textPinnedEmpty — the
+                    // source FORMTEXT had a <w:default> but an EMPTY result), do NOT
+                    // materialize the default as a visible result run; that injected
+                    // body text the source never displayed (a "THESIS TITLE"
+                    // placeholder rendered twice). Mirrors the FORMDROPDOWN/
+                    // FORMCHECKBOX branches, which already guard with !textPinnedEmpty.
+                    if (string.IsNullOrEmpty(text) && !textPinnedEmpty)
                         text = defaultVal;
                 }
                 if (ciProps.TryGetValue("maxlength", out var maxLenStr) && int.TryParse(maxLenStr, out var maxLen))
