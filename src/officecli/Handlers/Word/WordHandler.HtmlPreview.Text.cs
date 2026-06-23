@@ -116,6 +116,14 @@ public partial class WordHandler
         if (classes.Count > 0)
             sb.Append($" class=\"{string.Join(" ", classes)}\"");
         var pStyle = GetParagraphInlineCss(para);
+        // A paragraph that anchors a wrapNone shape positioned relative to the
+        // column/paragraph (e.g. checkbox rectangles floated over a label list)
+        // becomes the position:relative containing block for those absolutely
+        // positioned shapes (see ComputeParagraphAnchorAbsoluteCss). Without this
+        // the shapes resolve against the .page box and the per-checkbox posOffset
+        // is lost — they stack at the cell's left edge as a vertical ladder.
+        if (ParagraphAnchorsSubParagraphShape(para))
+            pStyle = string.IsNullOrEmpty(pStyle) ? "position:relative" : pStyle + ";position:relative";
         if (!string.IsNullOrEmpty(pStyle))
             sb.Append($" style=\"{pStyle}\"");
         sb.Append(">");

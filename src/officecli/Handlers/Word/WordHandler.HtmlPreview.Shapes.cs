@@ -182,6 +182,18 @@ public partial class WordHandler
                         sb.Append($"<div style=\"position:absolute;top:0;left:0;width:100%;height:100%;z-index:-1;{fillCss}\"></div>");
                     return;
                 }
+                // wrapNone shape anchored relative to the column/paragraph with
+                // explicit posOffsets (e.g. checkbox rectangles floated over a
+                // label list) → absolutely position it from the host paragraph's
+                // top-left so each shape lands at its posOffset instead of
+                // stacking inline at the cell's left edge. The host paragraph is
+                // made position:relative in BuildParagraphOpenTag.
+                var paraAbsCss = ComputeParagraphAnchorAbsoluteCss(drawing);
+                if (paraAbsCss != null)
+                {
+                    RenderStandaloneShapeHtml(sb, shape, shapeWidth, shapeHeight, floatImages, paraAbsCss);
+                    return;
+                }
                 // Anchored (floating) shape/textbox with wrapSquare/wrapTight
                 // must float so following text wraps beside it — mirror the
                 // anchored-image float logic. Inline shapes and
@@ -776,6 +788,104 @@ public partial class WordHandler
         return isRight
             ? $"float:right;margin:{distT:0.#}pt {distR:0.#}pt {distB:0.#}pt {distL:0.#}pt"
             : $"float:left;margin:{distT:0.#}pt {distR:0.#}pt {distB:0.#}pt {distL:0.#}pt";
+    }
+
+    // Horizontal anchor origins that coincide with the text-column left edge
+    // (i.e. the start of the cell/paragraph content box). A posOffset relative
+    // to any of these is the distance from the paragraph's own left edge, so it
+    // can be emitted directly as `left:` inside the position:relative paragraph.
+    private static bool IsColumnLeftRelative(DW.HorizontalRelativePositionValues? from)
+        => from == DW.HorizontalRelativePositionValues.Column
+        || from == DW.HorizontalRelativePositionValues.Character
+        || from == DW.HorizontalRelativePositionValues.LeftMargin
+        || from == DW.HorizontalRelativePositionValues.InsideMargin;
+
+    // Vertical anchor origins measured from the paragraph/line top — the
+    // posOffset is the distance below the paragraph's own top edge, emitted
+    // directly as `top:` inside the position:relative paragraph.
+    private static bool IsParagraphTopRelative(DW.VerticalRelativePositionValues? from)
+        => from == DW.VerticalRelativePositionValues.Paragraph
+        || from == DW.VerticalRelativePositionValues.Line;
+
+    /// <summary>
+    /// True when the paragraph anchors at least one wrapNone shape positioned
+    /// relative to the column/paragraph with explicit H+V posOffsets — the case
+    /// ComputeParagraphAnchorAbsoluteCss positions absolutely. Drives the
+    /// position:relative on the paragraph's host div so those absolute children
+    /// resolve against the paragraph instead of the .page box.
+    /// </summary>
+    private static bool ParagraphAnchorsSubParagraphShape(Paragraph para)
+    {
+        foreach (var drawing in para.Descendants<Drawing>())
+        {
+            if (drawing.Descendants().Any(e => e.LocalName == "wsp")
+                && ComputeParagraphAnchorAbsoluteCss(drawing) != null)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// True when any paragraph in the table cell anchors a column/paragraph
+    /// wrapNone shape positioned absolutely (see ComputeParagraphAnchorAbsoluteCss).
+    /// Drives position:relative on the host &lt;td&gt; so those absolute shapes
+    /// resolve against the cell content box. Applied on the cell — not the inner
+    /// paragraph div — because a relative div whose only in-flow content is
+    /// wrapped text inside a table cell collapses the row height to zero.
+    /// </summary>
+    private static bool CellAnchorsSubParagraphShape(TableCell cell)
+    {
+        foreach (var para in cell.Descendants<Paragraph>())
+        {
+            if (ParagraphAnchorsSubParagraphShape(para))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// For a wrapNone shape anchored relative to the column/paragraph (H from
+    /// column/character/left-margin/inside-margin, V from paragraph/line) with
+    /// explicit H and V posOffsets, compute absolute positioning CSS measured
+    /// from the host paragraph's top-left. Returns null for any other anchor
+    /// shape — page/page (handled against .page in ComputeAnchorWrapFloatCss),
+    /// aligned (align= rather than posOffset), wrapped, or inline — so those
+    /// paths keep their existing behaviour.
+    ///
+    /// This recovers per-shape placement for forms whose checkbox/marker
+    /// rectangles float over a label list via column/paragraph posOffsets; in
+    /// flow HTML they otherwise collapse to a left-edge ladder.
+    /// </summary>
+    private static string? ComputeParagraphAnchorAbsoluteCss(Drawing drawing)
+    {
+        var anchor = drawing.Descendants<DW.Anchor>().FirstOrDefault();
+        if (anchor == null) return null;
+
+        // Only wrapNone (overlap) shapes — wrapped shapes float and own their
+        // own square/tight path; this is purely the over-text overlay case.
+        if (!anchor.Elements().Any(e => e.LocalName == "wrapNone")) return null;
+
+        var hPos = anchor.GetFirstChild<DW.HorizontalPosition>();
+        var vPos = anchor.GetFirstChild<DW.VerticalPosition>();
+        if (hPos == null || vPos == null) return null;
+
+        if (!IsColumnLeftRelative(hPos.RelativeFrom?.Value)) return null;
+        if (!IsParagraphTopRelative(vPos.RelativeFrom?.Value)) return null;
+
+        // Require explicit posOffsets — an align= (left/center/right or
+        // top/bottom/center) is not a sub-paragraph coordinate we can resolve.
+        var hOff = hPos.Descendants().FirstOrDefault(e => e.LocalName == "posOffset");
+        var vOff = vPos.Descendants().FirstOrDefault(e => e.LocalName == "posOffset");
+        if (hOff == null || vOff == null) return null;
+        if (!long.TryParse(hOff.InnerText, out var hEmu)) return null;
+        if (!long.TryParse(vOff.InnerText, out var vEmu)) return null;
+
+        var leftPt = hEmu / EmuConverter.EmuPerPointF;
+        var topPt = vEmu / EmuConverter.EmuPerPointF;
+
+        // behindDoc="1" → under the text (e.g. shaded marker); else over it.
+        var z = anchor.BehindDoc?.Value == true ? "-1" : "5";
+        return $"position:absolute;left:{leftPt:0.#}pt;top:{topPt:0.#}pt;z-index:{z}";
     }
 
     /// <summary>

@@ -382,6 +382,18 @@ public partial class WordHandler
                     continue; // Skip merged continuation cells
                 }
 
+                // A cell that anchors wrapNone shapes positioned relative to the
+                // column/paragraph (e.g. checkbox rectangles floated over a label
+                // list) becomes the position:relative containing block for those
+                // absolutely positioned shapes — applied on the <td> rather than
+                // the inner paragraph div so the label text keeps its normal flow
+                // height (a relative div whose only in-flow content is wrapped
+                // text inside a table cell collapses the row to zero otherwise).
+                // The shapes' left/top posOffsets are measured from the cell's
+                // content box, which coincides with the column/paragraph origin.
+                if (CellAnchorsSubParagraphShape(cell))
+                    cellStyle = string.IsNullOrEmpty(cellStyle) ? "position:relative" : cellStyle + ";position:relative";
+
                 if (!string.IsNullOrEmpty(cellStyle))
                     attrs.Append($" style=\"{cellStyle}\"");
 

@@ -2523,6 +2523,15 @@ public partial class WordHandler
                     if (classNames.Count > 0)
                         sb.Append($" class=\"{string.Join(" ", classNames)}\"");
                     var pStyle = GetParagraphInlineCss(para);
+                    // A body paragraph that anchors a wrapNone shape positioned
+                    // relative to the column/paragraph (see
+                    // ComputeParagraphAnchorAbsoluteCss) is the position:relative
+                    // containing block for those absolutely positioned shapes —
+                    // mirrors BuildParagraphOpenTag (header/footer path) and the
+                    // table-cell <td> path. Without it the shapes resolve against
+                    // the .page box and lose their per-shape posOffset.
+                    if (ParagraphAnchorsSubParagraphShape(para))
+                        pStyle = string.IsNullOrEmpty(pStyle) ? "position:relative" : pStyle + ";position:relative";
                     if (!string.IsNullOrEmpty(pStyle))
                         sb.Append($" style=\"{pStyle}\"");
                     sb.Append(">");
