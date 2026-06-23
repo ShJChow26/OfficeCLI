@@ -2552,7 +2552,11 @@ public partial class WordHandler
         // checks "no Text element" (not "node.Text empty") because
         // GetRunText now surfaces TabChar as \t in node.Text. A pure
         // <w:r><w:tab/></w:r> run has no <w:t> child but node.Text="\t".
-        if (node.Type == "run" && !run.Elements<Text>().Any())
+        // BUG-DUMP-DELTAB: also exclude runs carrying <w:delText> (a tracked
+        // deletion). GetRunText surfaces delText into node.Text; without this
+        // exclusion a deleted run mixing <w:tab/> + <w:delText> was reclassified
+        // tab-only and node.Text wiped to "", silently dropping the deleted text.
+        if (node.Type == "run" && !run.Elements<Text>().Any() && !run.Elements<DeletedText>().Any())
         {
             var tabEls = run.Elements<TabChar>().ToList();
             // BUG-DUMP-R25-2: a tab-only run carrying MULTIPLE <w:tab/> chars
@@ -2580,7 +2584,7 @@ public partial class WordHandler
         // with text="\n" that the emitter mis-rendered. A mixed run
         // <w:t>foo</w:t><w:br/> still has a <w:t> child, so it stays a run
         // (text="foo\n") and the inline break is preserved as \n.
-        if (node.Type == "run" && !run.Elements<Text>().Any())
+        if (node.Type == "run" && !run.Elements<Text>().Any() && !run.Elements<DeletedText>().Any())
         {
             var breakEl = run.GetFirstChild<Break>();
             if (breakEl != null)
