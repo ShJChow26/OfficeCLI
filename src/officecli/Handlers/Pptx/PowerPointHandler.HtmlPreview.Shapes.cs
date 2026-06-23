@@ -1450,12 +1450,27 @@ public partial class PowerPointHandler
             if (!string.IsNullOrEmpty(borderCss))
                 styles.Add(borderCss);
         }
+        else
+        {
+            // Style-matrix lnRef fallback (parity with RenderShape): a "Picture Style"
+            // preset (Picture Format → Picture Styles) encodes its border as
+            // p:style/a:lnRef into the theme line-style matrix with no explicit a:ln.
+            // RenderPicture previously ignored pic.ShapeStyle entirely, so a styled
+            // picture rendered with no border.
+            var lnRefCss = GetStyleLineRefCss(pic.ShapeStyle, slidePart, themeColors);
+            if (!string.IsNullOrEmpty(lnRefCss))
+                styles.Add(lnRefCss);
+        }
 
         // Effects: brightness, contrast, glow, shadow, opacity all roll
         // into one CSS `filter` property (drop-shadow / brightness /
         // contrast) so they compose. Mirror the shape renderer above:
         // shadowCss + glowCss merged into filter:..., reflection separate.
-        var effectList = pic.ShapeProperties?.GetFirstChild<Drawing.EffectList>();
+        // Style-matrix effectRef fallback (parity with RenderShape): a Picture Style
+        // preset encodes its shadow/glow as p:style/a:effectRef with no explicit
+        // effectLst — resolve it the same way shapes do.
+        var effectList = pic.ShapeProperties?.GetFirstChild<Drawing.EffectList>()
+            ?? ResolveStyleEffectRefList(pic.ShapeStyle, slidePart);
         var shadowCss = EffectListToShadowCss(effectList, themeColors);
         var glowCss = EffectListToGlowCss(effectList, themeColors);
 
