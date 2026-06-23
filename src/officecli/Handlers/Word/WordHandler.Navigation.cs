@@ -1540,8 +1540,8 @@ public partial class WordHandler
                     // first bookmarkEnd in a stack whose id is 4 but the 4th end has
                     // id 7) re-read the WRONG element, producing a duplicate bookmark
                     // id on round-trip.
-                    BookmarkEnd be => be.Id?.Value.ToString() == targetId,
-                    BookmarkStart bs => bs.Id?.Value.ToString() == targetId,
+                    BookmarkEnd be => be.Id?.Value?.ToString() == targetId,
+                    BookmarkStart bs => bs.Id?.Value?.ToString() == targetId,
                     _ => false,
                 });
             }
@@ -3932,23 +3932,20 @@ public partial class WordHandler
                     if (start != null)
                         node.Format["start"] = start.Value;
                 }
-                // BUG-DUMP-R49-1: <w:numPr><w:ins .../> is a tracked insertion
-                // of the list-numbering assignment (Reviewing pane: "Formatted: List
-                // Paragraph"). Surface as numPrIns.* so the batch emitter can
-                // replay <w:numPr><w:ins> via a raw-set after the paragraph is
-                // created (no first-class Add/Set vocabulary for numPr tracked
-                // changes exists; verbatim is the safest round-trip). Mirrors the
-                // paraMarkIns.* readback pattern for paragraph-mark tracked changes.
-                var numPrIns = numProps.GetFirstChild<Inserted>();
-                if (numPrIns != null)
-                {
-                    if (!string.IsNullOrEmpty(numPrIns.Author?.Value))
-                        node.Format["numPrIns.author"] = numPrIns.Author!.Value!;
-                    if (numPrIns.Date?.Value is DateTime npiDate)
-                        node.Format["numPrIns.date"] = npiDate.ToString("o");
-                    if (numPrIns.Id?.Value is { } npiId)
-                        node.Format["numPrIns.id"] = npiId.ToString();
-                }
+            }
+            else if (numProps != null)
+            {
+                // BUG-DUMP-H77: a direct <w:numPr> with NO <w:numId> child — a bare
+                // list-level override (<w:ilvl> only) or a tracked numbering-insertion
+                // (<w:numPr><w:ins/></w:numPr>, no ilvl/numId). The numId branch above
+                // is skipped, and the style-inheritance fallback would either miss it
+                // or wrongly promote inherited numbering — so the whole numPr was
+                // silently dropped on `add p`. Surface numLevel directly (NO numId, so
+                // no numFmt/listStyle/start lookup and NO numInherited flag); the
+                // numPrIns.* readback below fires for both numId and numId-less numPr.
+                var bareIlvl = numProps.NumberingLevelReference?.Val?.Value;
+                if (bareIlvl.HasValue)
+                    node.Format["numLevel"] = bareIlvl.Value.ToString();
             }
             else
             {
@@ -3974,6 +3971,26 @@ public partial class WordHandler
                     var start = GetStartValue(inhId, inhLvl);
                     if (start != null)
                         node.Format["start"] = start.Value;
+                }
+            }
+            // BUG-DUMP-R49-1 / BUG-DUMP-H77: <w:numPr><w:ins .../> is a tracked
+            // insertion of the list-numbering assignment (Reviewing pane: "Formatted:
+            // List Paragraph"). Surface as numPrIns.* so the batch emitter can replay
+            // <w:numPr><w:ins> after the paragraph is created (no first-class Add/Set
+            // vocabulary for numPr tracked changes; verbatim is the safest round-trip).
+            // Fires for BOTH a numId-bearing numPr AND a numId-less one — a tracked
+            // numbering insertion frequently carries no numId/ilvl at all.
+            if (numProps != null)
+            {
+                var numPrIns = numProps.GetFirstChild<Inserted>();
+                if (numPrIns != null)
+                {
+                    if (!string.IsNullOrEmpty(numPrIns.Author?.Value))
+                        node.Format["numPrIns.author"] = numPrIns.Author!.Value!;
+                    if (numPrIns.Date?.Value is DateTime npiDate)
+                        node.Format["numPrIns.date"] = npiDate.ToString("o");
+                    if (numPrIns.Id?.Value is { } npiId)
+                        node.Format["numPrIns.id"] = npiId.ToString();
                 }
             }
 
@@ -5028,6 +5045,40 @@ public partial class WordHandler
                         node.Children.Add(MarkerNode("<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>"));
                         fldSimpleMergeIdx++;
                     }
+                    else if (fld.Elements<DeletedRun>().Any() || fld.Elements<InsertedRun>().Any()
+                             || fld.Elements<MoveFromRun>().Any() || fld.Elements<MoveToRun>().Any())
+                    {
+                        // BUG-DUMP-H79: a <w:fldSimple> whose cached result contains a
+                        // tracked change (<w:del>/<w:ins>/<w:moveFrom>/<w:moveTo>) cannot
+                        // round-trip through the text-only `field` node below — the
+                        // displayText scan uses Descendants<Text>(), which excludes
+                        // <w:delText>, so the deleted result text was silently dropped,
+                        // and the typed `add field` path has no model for a deleted result
+                        // run. Decompose into a complex field whose result content is
+                        // emitted VERBATIM (each fldSimple child OuterXml, preserving the
+                        // <w:del>/<w:ins> wrapper), bracketed by synthesized begin/instr/
+                        // separate/end markers. Mirrors the drawing-result decomposition
+                        // above and the complex-field-result del fix.
+                        string EscInstr(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+                        var chain = new System.Text.StringBuilder();
+                        chain.Append("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>")
+                             .Append("<w:r><w:instrText xml:space=\"preserve\">").Append(EscInstr(instr)).Append("</w:instrText></w:r>")
+                             .Append("<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>");
+                        foreach (var child in fld.Elements())
+                            chain.Append(child.OuterXml);
+                        chain.Append("<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>");
+                        node.Children.Add(new DocumentNode
+                        {
+                            Type = "field",
+                            Path = $"{path}/field[{fldSimpleMergeIdx + 1}]",
+                            Format = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                            {
+                                ["_fieldMarkerRaw"] = true,
+                                ["_markerInlineXml"] = chain.ToString(),
+                            }
+                        });
+                        fldSimpleMergeIdx++;
+                    }
                     else
                     {
                         var displayText = string.Join("", fld.Descendants<Text>().Select(t => t.Text));
@@ -5873,9 +5924,9 @@ public partial class WordHandler
             // an absent hRule as auto row-sizing. Only emit height.rule when
             // the source actually carried an explicit exact/atLeast; emitting
             // it for auto would let Add/Set inject a spurious atLeast.
-            if (rh.HeightType?.Value == HeightRuleValues.Exact)
+            if (rh?.HeightType?.Value == HeightRuleValues.Exact)
                 node.Format["height.rule"] = "exact";
-            else if (rh.HeightType?.Value == HeightRuleValues.AtLeast)
+            else if (rh?.HeightType?.Value == HeightRuleValues.AtLeast)
                 node.Format["height.rule"] = "atLeast";
         }
         // BUG-DUMP-R35-TRBOOL: these are CT_TrPr on/off toggles (CT_OnOff). An
@@ -6119,7 +6170,7 @@ public partial class WordHandler
                     }
                     else if (isSolidVal && hasFillColor && !hasPatternColor && !hasTheme)
                     {
-                        node.Format["fill"] = ParseHelpers.FormatHexColor(cShdFill);
+                        node.Format["fill"] = ParseHelpers.FormatHexColor(cShdFill!);
                     }
                     else
                     {
@@ -6129,7 +6180,7 @@ public partial class WordHandler
                         // the same shape).
                         if (!string.IsNullOrEmpty(cShdVal)) node.Format["shading.val"] = cShdVal;
                         if (!string.IsNullOrEmpty(cShdFill)) node.Format["shading.fill"] = ParseHelpers.FormatHexColor(cShdFill);
-                        if (hasPatternColor) node.Format["shading.color"] = ParseHelpers.FormatHexColor(cShdColor);
+                        if (hasPatternColor) node.Format["shading.color"] = ParseHelpers.FormatHexColor(cShdColor!);
                         ReadShadingTheme(shd, node);
                     }
                 }
@@ -6409,14 +6460,14 @@ public partial class WordHandler
         }
         else if (isSolidVal && hasFillColor && !hasPatternColor && !hasTheme)
         {
-            node.Format["fill"] = ParseHelpers.FormatHexColor(shdFill);
+            node.Format["fill"] = ParseHelpers.FormatHexColor(shdFill!);
         }
         else
         {
             // Pattern / theme / pattern-color: keep the detail keys verbatim.
             if (!string.IsNullOrEmpty(shdVal)) node.Format["shading.val"] = shdVal;
             if (!string.IsNullOrEmpty(shdFill)) node.Format["shading.fill"] = ParseHelpers.FormatHexColor(shdFill);
-            if (hasPatternColor) node.Format["shading.color"] = ParseHelpers.FormatHexColor(shdColor);
+            if (hasPatternColor) node.Format["shading.color"] = ParseHelpers.FormatHexColor(shdColor!);
             ReadShadingTheme(shd, node);
         }
     }

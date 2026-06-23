@@ -81,6 +81,66 @@ public partial class WordHandler
     /// empty span. A trailing run that holds only the paragraph mark or empty
     /// rPr is not content.
     /// </summary>
+    // Map an underlined run's already-computed inline CSS (`style`) to a
+    // border-bottom declaration for an EMPTY tab spacer. The run's w:u becomes
+    // text-decoration:underline in `style`, but text-decoration paints over
+    // glyphs only — an empty inline-block spacer shows nothing. Re-express the
+    // underline as the spacer's own border so the fill-in rule is visible across
+    // the tab gap. Returns "" (no border) when the run isn't underlined.
+    //   single        → 1px solid     double → 3px double
+    //   dotted         → 1px dotted    dashed → 1px dashed   wavy → 1px solid (no border equiv)
+    //   thick/*Heavy   → 2px solid
+    // Color follows the run text (currentColor) unless w:u carries an explicit
+    // text-decoration-color, which we honour.
+    private static string UnderlineBorderFromStyle(string? style)
+    {
+        if (string.IsNullOrEmpty(style)
+            || !style.Contains("text-decoration:underline", StringComparison.Ordinal))
+            return "";
+        // line-through-only (text-decoration:line-through) won't contain
+        // "text-decoration:underline" so it's already excluded above.
+        var width = "1px";
+        var lineStyle = "solid";
+        if (style.Contains("text-decoration-style:double", StringComparison.Ordinal))
+        { width = "3px"; lineStyle = "double"; }
+        else if (style.Contains("text-decoration-style:dotted", StringComparison.Ordinal))
+            lineStyle = "dotted";
+        else if (style.Contains("text-decoration-style:dashed", StringComparison.Ordinal))
+            lineStyle = "dashed";
+        // wavy has no border equivalent → keep solid.
+        if (style.Contains("text-decoration-thickness:2px", StringComparison.Ordinal))
+            width = "2px";
+        // Honour an explicit underline color; else follow the text color.
+        var color = "currentColor";
+        const string colorKey = "text-decoration-color:";
+        var ci = style.IndexOf(colorKey, StringComparison.Ordinal);
+        if (ci >= 0)
+        {
+            var start = ci + colorKey.Length;
+            var end = style.IndexOf(';', start);
+            if (end < 0) end = style.Length;
+            var c = style.Substring(start, end - start).Trim();
+            if (!string.IsNullOrEmpty(c)) color = c;
+        }
+        return $"border-bottom:{width} {lineStyle} {color};";
+    }
+
+    /// <summary>
+    /// True when <paramref name="run"/> holds the LAST &lt;w:tab&gt; in the
+    /// paragraph (counting tabs at any depth, e.g. inside a &lt;w:hyperlink&gt;
+    /// wrapping the whole TOC entry). Used to snap a TOC entry's single/final
+    /// tab to the right+leader stop even when positional tab-stop indexing
+    /// landed on an earlier (left) stop — TOC entries without a leading number
+    /// emit fewer &lt;w:tab&gt; runs than the TOC style declares stops.
+    /// </summary>
+    private static bool IsLastTabInParagraph(Run run, Paragraph para)
+    {
+        var tab = run.Descendants<TabChar>().FirstOrDefault();
+        if (tab == null) return false;
+        var lastTab = para.Descendants<TabChar>().LastOrDefault();
+        return ReferenceEquals(tab, lastTab);
+    }
+
     private static bool RunHasContentAfter(Run run, Paragraph para)
     {
         bool seenRun = false;
@@ -108,6 +168,73 @@ public partial class WordHandler
             }
         }
         return false;
+    }
+
+    // True when the run's only visible content is whitespace text: it has at
+    // least one <w:t> and every <w:t> is whitespace, AND it carries no special
+    // child (tab / break / symbol / drawing / ptab) that would render a glyph
+    // or a decorated gap. Used to suppress a phantom inherited underline that
+    // real Word never draws under a pure-whitespace run.
+    private static bool IsWhitespaceOnlyTextRun(Run run)
+    {
+        bool hasText = false;
+        foreach (var child in run.ChildElements)
+        {
+            switch (child)
+            {
+                case Text t:
+                    hasText = true;
+                    if (!string.IsNullOrWhiteSpace(t.Text)) return false;
+                    break;
+                case RunProperties:
+                    break;
+                // Any glyph/gap-bearing special child disqualifies the run
+                // (tab underline / symbol / image are real decorated content).
+                case TabChar:
+                case PositionalTab:
+                case Break:
+                case CarriageReturn:
+                case SymbolChar:
+                case Drawing:
+                    return false;
+                default:
+                    if (child.LocalName is "noBreakHyphen" or "softHyphen")
+                        return false;
+                    break;
+            }
+        }
+        return hasText;
+    }
+
+    // Removes the "underline" keyword from a space-separated text-decoration
+    // declaration while preserving any co-present "line-through". Leaves all
+    // other style declarations untouched.
+    private static string StripUnderlineDecoration(string style)
+    {
+        var parts = style.Split(';');
+        var kept = new List<string>(parts.Length);
+        foreach (var p in parts)
+        {
+            var trimmed = p.Trim();
+            if (trimmed.StartsWith("text-decoration:", StringComparison.Ordinal))
+            {
+                var value = trimmed.Substring("text-decoration:".Length).Trim();
+                var keywords = value.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Where(k => k != "underline")
+                    .ToArray();
+                if (keywords.Length == 0) continue; // drop the now-empty decl
+                kept.Add("text-decoration:" + string.Join(' ', keywords));
+                continue;
+            }
+            // Underline-only sub-properties become meaningless once underline
+            // is gone; drop them so no orphan style/thickness/color lingers.
+            if (trimmed.StartsWith("text-decoration-style:", StringComparison.Ordinal)
+                || trimmed.StartsWith("text-decoration-thickness:", StringComparison.Ordinal)
+                || trimmed.StartsWith("text-decoration-color:", StringComparison.Ordinal))
+                continue;
+            if (trimmed.Length > 0) kept.Add(trimmed);
+        }
+        return string.Join(";", kept);
     }
 
     private void RenderParagraphHtml(StringBuilder sb, Paragraph para)
@@ -328,6 +455,62 @@ public partial class WordHandler
                     if (emittedRuns.Contains(innerRun)) continue;
                     RenderRunHtml(sb, innerRun, para);
                 }
+                // Legacy Office 2003 smart tags (<w:smartTag>) parse as an
+                // OpenXmlUnknownElement whose nested <w:r> are also unknown, so
+                // Descendants<Run>() finds none. Rebuild each unknown <w:r> as a
+                // typed Run from its OuterXml and render it through the normal
+                // run path so its rPr (italic, size, color, …) is preserved —
+                // emitting child.InnerText here would drop all formatting,
+                // making smartTag-wrapped runs render upright while their
+                // byte-identical direct-child siblings render italic
+                // (R102-1: "Bucharest"/"Romania" upright inside an all-italic
+                // affiliation line). Bare InnerText remains the last resort.
+                if (!child.Descendants<Hyperlink>().Any() && !child.Descendants<Run>().Any())
+                {
+                    bool renderedAny = false;
+                    foreach (var unkRun in child.Descendants<DocumentFormat.OpenXml.OpenXmlUnknownElement>())
+                    {
+                        if (unkRun.LocalName != "r"
+                            || unkRun.NamespaceUri != "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
+                            continue;
+                        // A nested smartTag's runs are picked up by the outer
+                        // Descendants pass already; skip runs that sit inside a
+                        // deeper smartTag/customXml so they aren't rendered twice.
+                        bool nestedDeeper = false;
+                        for (var anc = unkRun.Parent; anc != null && anc != child; anc = anc.Parent)
+                            if (anc is DocumentFormat.OpenXml.OpenXmlUnknownElement uw
+                                && uw.NamespaceUri == "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                                && (uw.LocalName == "smartTag" || uw.LocalName == "customXml"))
+                            { nestedDeeper = true; break; }
+                        if (nestedDeeper) continue;
+                        Run? typedRun = null;
+                        try
+                        {
+                            // OuterXml of an unknown <w:r> may omit the xmlns:w
+                            // declaration when the prefix is bound on an ancestor;
+                            // new Run(xml) then can't bind the prefix. Inject the
+                            // WordprocessingML namespace when it's missing so the
+                            // fragment parses standalone.
+                            var xml = unkRun.OuterXml;
+                            if (!string.IsNullOrEmpty(xml) && !xml.Contains("xmlns:w=", StringComparison.Ordinal))
+                                xml = xml.Replace("<w:r ",
+                                        "<w:r xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" ",
+                                        StringComparison.Ordinal)
+                                    .Replace("<w:r>",
+                                        "<w:r xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">",
+                                        StringComparison.Ordinal);
+                            typedRun = new Run(xml);
+                        }
+                        catch { typedRun = null; }
+                        if (typedRun != null)
+                        {
+                            RenderRunHtml(sb, typedRun, para);
+                            renderedAny = true;
+                        }
+                    }
+                    if (!renderedAny && !string.IsNullOrEmpty(child.InnerText))
+                        sb.Append(System.Net.WebUtility.HtmlEncode(child.InnerText));
+                }
             }
         }
 
@@ -387,6 +570,28 @@ public partial class WordHandler
                 var currentChecked = checkBox.GetFirstChild<Checked>()?.Val?.Value == true;
                 var isChecked = currentChecked || defaultChecked;
                 sb.Append(isChecked ? "☑" : "☐");
+                return;
+            }
+            // Legacy FORMDROPDOWN: ffData/ddList holds the list entries; the
+            // selected index lives in <w:result w:val=N> (DropDownListSelection)
+            // or <w:default w:val=N> (DefaultDropDownListItemIndex), defaulting
+            // to 0. The chosen entry's text is a static display value (not a
+            // deferred field eval), so always render it — unlike FORMTEXT /
+            // FORMCHECKBOX whose live content is excluded from the eval allowlist.
+            var ddList = ffData?.GetFirstChild<DropDownListFormField>();
+            if (ddList != null)
+            {
+                var entries = ddList.Elements<ListEntryFormField>().ToList();
+                if (entries.Count > 0)
+                {
+                    int sel = (int?)ddList.GetFirstChild<DropDownListSelection>()?.Val?.Value
+                              ?? (int?)ddList.GetFirstChild<DefaultDropDownListItemIndex>()?.Val?.Value
+                              ?? 0;
+                    if (sel < 0 || sel >= entries.Count) sel = 0;
+                    var entryText = entries[sel].Val?.Value;
+                    if (!string.IsNullOrEmpty(entryText))
+                        sb.Append(HtmlEncode(entryText));
+                }
                 return;
             }
         }
@@ -462,6 +667,21 @@ public partial class WordHandler
         if (rProps.SpecVanish != null && (rProps.SpecVanish.Val == null || rProps.SpecVanish.Val.Value))
             return;
         var style = GetRunInlineCss(rProps, para);
+
+        // Phantom-underline suppression: a run whose entire visible content is
+        // whitespace (e.g. a 30-space spacer carrying a Heading2 style's
+        // <w:u w:val="single"/>) draws NO underline in real Word. Strip the
+        // inherited underline from such a run's style. Restricted to runs whose
+        // content is purely whitespace TEXT — tab-only runs are excluded so the
+        // underlined-tab heading separator (RunHasContentAfter path below) and
+        // positional-tab leaders keep their decoration. line-through is
+        // preserved (strike on a blank run is unusual but harmless).
+        if (!string.IsNullOrEmpty(style)
+            && style.Contains("text-decoration:underline", StringComparison.Ordinal)
+            && IsWhitespaceOnlyTextRun(run))
+        {
+            style = StripUnderlineDecoration(style);
+        }
 
         // Format revision (w:rPrChange) — a tracked formatting change. The
         // final format is already applied via GetRunInlineCss above; mirror
@@ -601,8 +821,19 @@ public partial class WordHandler
                         .Where(t => t.Val?.InnerText != "clear" && t.Position?.HasValue == true)
                         .OrderBy(t => t.Position!.Value).ToList();
                     int aIdx = _ctx.CurrentParagraphTabIndex;
-                    var nextVal = (alignedStops != null && aIdx < alignedStops.Count)
-                        ? alignedStops[aIdx].Val?.InnerText : null;
+                    // A tab that runs PAST the last defined stop (more <w:tab/>
+                    // runs than custom stops — e.g. a single right stop driving a
+                    // " \t Curriculum Vitae \t Replace…" header) keeps the LAST
+                    // stop's alignment rather than silently dropping to left. Word
+                    // pushes the overflow segment to a default tab stop, but the
+                    // governing stop's alignment (here right) still pins the field
+                    // to the right edge; falling back to null→left instead glued
+                    // the final field flush-left against the previous segment.
+                    var nextVal = (alignedStops != null && alignedStops.Count > 0)
+                        ? (aIdx < alignedStops.Count
+                            ? alignedStops[aIdx].Val?.InnerText
+                            : alignedStops[alignedStops.Count - 1].Val?.InnerText)
+                        : null;
                     _ctx.CurrentAlignedTabAlign = nextVal switch
                     {
                         "center" => "center",
@@ -631,9 +862,37 @@ public partial class WordHandler
                 int curTabIdx = _ctx.CurrentParagraphTabIndex;
                 var curStop = (leaderOrderedStops != null && curTabIdx < leaderOrderedStops.Count)
                     ? leaderOrderedStops[curTabIdx] : null;
-                var rightLeaderTab = (curStop?.Val?.InnerText == "right"
-                    && curStop.Leader?.InnerText is "dot" or "hyphen" or "underscore" or "middleDot" or "dash" or "heavy")
-                    ? curStop : null;
+                // TOC entry with FEWER <w:tab/> runs than tab stops: a TOC1 style
+                // declares both a left stop (indent for the leading number) AND a
+                // right+leader stop (the dot leader before the page number). An
+                // entry WITHOUT a leading number (e.g. "INTRODUCTION TO THE
+                // TEMPLATE\t3") emits only ONE <w:tab/>, so positional indexing
+                // maps tabIdx 0 → the LEFT stop and the dot leader is lost (the
+                // page number glues to the title). Word instead advances the
+                // single tab to the next stop at/after the pen, which for the
+                // final tab before the page number is the right+leader stop.
+                // Promote curStop to that leader stop when THIS is the last
+                // <w:tab/> in the paragraph and a right+leader stop sits later in
+                // the ordered list — recovering the dot leader without disturbing
+                // the multi-tab "center, right:dot" bookkeeping (which keeps its
+                // positional stop because its current tab is NOT the last one, or
+                // already lands on the leader stop).
+                bool curIsLeaderStop = curStop?.Val?.InnerText == "right"
+                    && curStop.Leader?.InnerText is "dot" or "hyphen" or "underscore" or "middleDot" or "dash" or "heavy";
+                if (!curIsLeaderStop && leaderOrderedStops != null
+                    && IsLastTabInParagraph(run, para))
+                {
+                    var trailingLeaderStop = leaderOrderedStops
+                        .Skip(curTabIdx + 1)
+                        .FirstOrDefault(t => t.Val?.InnerText == "right"
+                            && t.Leader?.InnerText is "dot" or "hyphen" or "underscore" or "middleDot" or "dash" or "heavy");
+                    if (trailingLeaderStop != null)
+                    {
+                        curStop = trailingLeaderStop;
+                        curIsLeaderStop = true;
+                    }
+                }
+                var rightLeaderTab = curIsLeaderStop ? curStop : null;
                 if (rightLeaderTab != null)
                 {
                     if (needsSpan) { sb.Append("</span>"); needsSpan = false; }
@@ -695,6 +954,16 @@ public partial class WordHandler
                             "underscore" or "heavy" => "border-bottom:1px solid #000;",
                             _ => "",
                         };
+                        // Underlined tab gap (form fill-in line "Supplier: ____"):
+                        // the run carries w:u, so `style` already holds
+                        // text-decoration:underline — but an EMPTY inline-block
+                        // spacer has no glyph for text-decoration to paint over,
+                        // so the underline is invisible across the tab gap. Draw
+                        // the rule as the spacer's OWN border-bottom (mirrors the
+                        // aligned-tab band path above). Only when no positional
+                        // leader already supplies a bottom-border.
+                        if (string.IsNullOrEmpty(cssLeader))
+                            cssLeader = UnderlineBorderFromStyle(style);
                         // Tab absolute-alignment fix: instead of an EMPTY fixed-width
                         // spacer emitted AFTER the leading text (which makes the
                         // following text start at natural_text_width + gap — varying
@@ -740,7 +1009,11 @@ public partial class WordHandler
                         double defTabPt = 36.0;
                         if (dts?.Val?.HasValue == true && dts.Val.Value > 0)
                             defTabPt = dts.Val.Value / 20.0;
-                        sb.Append($"<span style=\"display:inline-block;width:{defTabPt:0.##}pt\"></span>");
+                        // Underlined tab gap → draw the rule as the spacer's own
+                        // border-bottom (empty inline-block has no glyph for the
+                        // run's text-decoration:underline to paint over).
+                        var defUlBorder = UnderlineBorderFromStyle(style);
+                        sb.Append($"<span style=\"display:inline-block;width:{defTabPt:0.##}pt;{defUlBorder}\"></span>");
                         OnHtmlRenderTab(defTabPt);
                     }
                     _ctx.CurrentParagraphTabIndex++;
@@ -921,8 +1194,15 @@ public partial class WordHandler
             var ph = widthPx > 0 && heightPx > 0
                 ? $"width:{widthPx}px;height:{heightPx}px;max-width:100%"
                 : "min-width:200px;min-height:100px";
-            sb.Append($"<div class=\"ole-placeholder\" style=\"{ph};border:1px dashed #bbb;background:#f5f5f5;display:flex;align-items:center;justify-content:center;color:#888;font-size:13px;margin:8px 0\">");
-            sb.Append("Embedded Object (preview not supported in browser)");
+            // Only label the box when it is large enough to hold the text.
+            // Small object glyphs (e.g. ActiveX OptionButton radios drawn as
+            // tiny WMF images, often dozens per form) would otherwise flood
+            // their cells with verbose text; the dashed box alone is the
+            // placeholder footprint there. overflow:hidden keeps any label
+            // inside the footprint instead of spilling into the layout.
+            var labelOle = (widthPx == 0 || widthPx >= 120) && (heightPx == 0 || heightPx >= 36);
+            sb.Append($"<div class=\"ole-placeholder\" style=\"{ph};border:1px dashed #bbb;background:#f5f5f5;display:flex;align-items:center;justify-content:center;overflow:hidden;color:#888;font-size:13px;margin:8px 0\">");
+            if (labelOle) sb.Append("Embedded object");
             sb.Append("</div>");
         }
     }
@@ -943,6 +1223,16 @@ public partial class WordHandler
 
         var fnFmt = GetFootnoteNumFmt();
         int num = 0;
+        // Inline images inside a footnote body carry r:embed ids that resolve
+        // against footnotes.xml.rels, NOT document.xml.rels. Point the image
+        // host part at the FootnotesPart for the duration of body rendering so
+        // LoadImageAsDataUri picks the right .rels (mirrors header/footer setup
+        // in RenderHeaderFooter). Otherwise an rId collision (e.g. footnote
+        // rId4→image2.png vs document rId4→settings.xml) loads the wrong bytes.
+        var fnSavedHost = _ctx.ImageHostPart;
+        _ctx.ImageHostPart = fnPart;
+        try
+        {
         // Snapshot: rendering a footnote body may itself reach a run carrying a
         // FootnoteReference, which appends to _ctx.FootnoteRefs. Iterating the
         // live List<int> mutates-during-enumerate → InvalidOperationException.
@@ -959,11 +1249,22 @@ public partial class WordHandler
             var fnLabel = _ctx.FnLabels.TryGetValue(fnId, out var cached)
                 ? cached
                 : FormatNoteNumber(num, fnFmt);
+            // Only synthesize the auto-number marker <sup> when the footnote body
+            // carries a <w:footnoteRef/> (FootnoteReferenceMark). A custom-marker
+            // footnote (no footnoteRef — the author typed a literal marker like "b"
+            // as the first run) already renders its own marker; emitting a synthetic
+            // <sup> on top would duplicate it (e.g. "ᵇ ᵇ"). Word behaves the same:
+            // a literal marker suppresses auto-number synthesis.
+            var fnHasRefMark = fn.Descendants<FootnoteReferenceMark>().Any();
             var fnSupStyle = ResolveNoteListSupStyle("FootnoteText");
-            sb.Append($"<div id=\"fn{fnId}\" style=\"margin:0.3em 0\"><sup style=\"{fnSupStyle}\">{fnLabel}</sup> ");
+            sb.Append($"<div id=\"fn{fnId}\" style=\"margin:0.3em 0\">");
+            if (fnHasRefMark)
+                sb.Append($"<sup style=\"{fnSupStyle}\">{fnLabel}</sup> ");
             RenderFootnoteChildren(sb, fn);
             sb.AppendLine($" <a href=\"#fnref{fnId}\" style=\"color:inherit;text-decoration:none\">\u21A9</a></div>");
         }
+        }
+        finally { _ctx.ImageHostPart = fnSavedHost; }
         sb.AppendLine("</div>");
     }
 
@@ -1078,6 +1379,13 @@ public partial class WordHandler
 
         var enFmt = GetEndnoteNumFmt();
         int num = 0;
+        // Endnote inline images resolve r:embed against endnotes.xml.rels — point
+        // the image host part at EndnotesPart for the body render (mirrors the
+        // footnote handling above).
+        var enSavedHost = _ctx.ImageHostPart;
+        _ctx.ImageHostPart = enPart;
+        try
+        {
         foreach (var enId in _ctx.EndnoteRefs)
         {
             num++;
@@ -1087,14 +1395,22 @@ public partial class WordHandler
             var enLabel = FormatNoteNumber(num, enFmt);
             var enIndent = ResolveStyleIndent("EndnoteText");
             var enIndentCss = enIndent != null ? $"text-indent:{enIndent}" : "";
+            // Mirror the footnote rule: only synthesize the auto-number <sup> when
+            // the endnote body carries a <w:endnoteRef/> (EndnoteReferenceMark).
+            // A custom-marker endnote renders its own literal marker.
+            var enHasRefMark = en.Descendants<EndnoteReferenceMark>().Any();
             var enSupStyle = ResolveNoteListSupStyle("EndnoteText");
-            sb.Append($"<div id=\"en{enId}\" style=\"margin:0.3em 0;{enIndentCss}\"><sup style=\"{enSupStyle}\">{enLabel}</sup> ");
+            sb.Append($"<div id=\"en{enId}\" style=\"margin:0.3em 0;{enIndentCss}\">");
+            if (enHasRefMark)
+                sb.Append($"<sup style=\"{enSupStyle}\">{enLabel}</sup> ");
             RenderFootnoteChildren(sb, en);
             // Back-reference link to the in-body endnote marker (id="enref{N}",
             // emitted at ref-render time). Mirrors the footnote back-link so the
             // two note lists are internally consistent.
             sb.AppendLine($" <a href=\"#enref{enId}\" style=\"color:inherit;text-decoration:none\">↩</a></div>");
         }
+        }
+        finally { _ctx.ImageHostPart = enSavedHost; }
         sb.AppendLine("</div>");
     }
 

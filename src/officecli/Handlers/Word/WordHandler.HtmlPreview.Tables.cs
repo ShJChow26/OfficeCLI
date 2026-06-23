@@ -39,12 +39,29 @@ public partial class WordHandler
         if (tblBorders == null && styleId != null)
             tblBorders = ResolveTableStyleBorders(styleId);
         bool tableBordersNone = IsTableBorderless(tblBorders);
+        // Table-level default cell margin (<w:tblCellMar>), with style fallback
+        // mirroring tblBorders. Cells consult this when they lack their own
+        // tcMar; an explicit value (incl. 0) overrides the hardcoded 5.4pt L/R
+        // td-padding default so a tblCellMar=0 invoice table doesn't lose
+        // content width to phantom padding under table-layout:fixed.
+        var tblCellMar = tblPr?.TableCellMarginDefault;
+        if (tblCellMar == null && styleId != null)
+            tblCellMar = ResolveTableStyleCellMargin(styleId);
 
         // Parse tblLook bitmask for conditional formatting
         var tblLook = ParseTableLook(tblPr);
 
         // Resolve conditional formatting from table style
         var condFormats = styleId != null ? ResolveTableStyleConditionalFormats(styleId) : null;
+
+        // Resolve the table-style base cell shading (<w:style><w:tcPr><w:shd>) —
+        // the whole-table cell fill. Used as the lowest-priority cell background
+        // fallback so a dark-list table's blue fill shows behind its white run
+        // color (which is applied on the <table>). Conditional-format shd and
+        // direct cell shd both override it.
+        var tableStyleCellFill = styleId != null
+            ? ResolveShadingFill(ResolveTableStyleCellShading(styleId))
+            : null;
 
         // Check for floating table (tblpPr = text wrapping)
         var tblpPr = tblPr?.GetFirstChild<TablePositionProperties>();
@@ -135,6 +152,14 @@ public partial class WordHandler
         // would otherwise eat the row's width). See the auto-fit comment in the width block below.
         bool autoGridFixable = false;
 
+        // Set when a pct-width table (w:tblW type="pct", e.g. width:100%) carries a complete tblGrid:
+        // like autoGridFixable, it gets table-layout:fixed (below) so the colgroup proportions become
+        // hard column widths. Without it the browser's auto algorithm lets a wide/unbreakable cell
+        // override the declared col widths and squeeze pure-text columns into a 1-char vertical strip
+        // ("O/w/n/e/r"). R31/R32's fixed pin only covered tblW=dxa / auto+grid tables; pct-width tables
+        // (common in templates) fell through. The percentage width itself stays on the table.
+        bool pctGridFixable = false;
+
         // Table width: explicit tblW → use it; pct → percentage; otherwise sum gridCol widths
         var tblW = tblPr?.TableWidth;
         var tblWType = tblW?.Type?.InnerText;
@@ -146,6 +171,16 @@ public partial class WordHandler
         {
             // pct values are in 1/50th of a percent (5000 = 100%)
             tableStyles.Add($"width:{pctW / 50.0:0.##}%");
+            // A complete tblGrid lets the colgroup percentages act as hard column proportions under
+            // table-layout:fixed (pinned below), matching Word's column sizing instead of letting the
+            // browser's content-driven auto algorithm collapse text columns.
+            var pctGrid = table.GetFirstChild<TableGrid>();
+            var pctGridCols = pctGrid?.Elements<GridColumn>().ToList();
+            if (pctGridCols != null && pctGridCols.Count > 0)
+            {
+                pctGridFixable = pctGridCols.All(gc =>
+                    gc.Width?.Value is string gw && int.TryParse(gw, out var v) && v > 0);
+            }
         }
         else
         {
@@ -225,7 +260,7 @@ public partial class WordHandler
         // no-grid tables keep their content-driven sizing).
         var isTableFixedLayout = tblPr?.TableLayout?.Type?.InnerText == "fixed";
         if ((isTableFixedLayout && table.GetFirstChild<TableGrid>()?.Elements<GridColumn>().Any() == true)
-            || autoGridFixable)
+            || autoGridFixable || pctGridFixable)
             tableStyles.Add("table-layout:fixed");
 
         var tableClass = tableBordersNone ? "borderless" : "";
@@ -270,16 +305,24 @@ public partial class WordHandler
                 foreach (var tc in r.Elements<TableCell>())
                 {
                     if (ci >= colCount) break;
+                    var span = tc.TableCellProperties?.GridSpan?.Val?.Value ?? 1;
+                    if (span < 1) span = 1;
                     var tcW = tc.TableCellProperties?.TableCellWidth;
-                    if (tcW?.Type?.InnerText == "pct" && pctByCol[ci] == null
+                    // Only a single-column cell's pct can be attributed to one grid column. A cell
+                    // that spans N columns carries the COMBINED pct for all N columns (whole-table
+                    // units, 5000 = 100%); stamping that combined value onto the span's first column
+                    // (and leaving the rest to gridCol fallback) produced wildly wrong widths whose
+                    // sum exceeded 100% (e.g. a 3-col span's 71% landing on one column). For spanning
+                    // pct cells we skip the per-cell path entirely and let every column it covers use
+                    // the accurate gridCol proportions below (which already sum to ~100%).
+                    if (span == 1 && tcW?.Type?.InnerText == "pct" && pctByCol[ci] == null
                         && int.TryParse(tcW.Width?.Value, out var pctVal) && pctVal > 0)
                     {
                         // pct units are 1/50th of a percent (5000 = 100%)
                         pctByCol[ci] = pctVal / 50.0;
                     }
                     // gridSpan-aware advance so column index stays aligned
-                    var span = tc.TableCellProperties?.GridSpan?.Val?.Value ?? 1;
-                    ci += span < 1 ? 1 : span;
+                    ci += span;
                 }
             }
 
@@ -357,7 +400,7 @@ public partial class WordHandler
                 var tag = isHeader ? "th" : "td";
                 var condTypes = GetConditionalTypes(tblLook, rowIdx, colIdx, totalRows, totalCols);
                 var cellStyle = GetTableCellInlineCss(cell, tableBordersNone, tblBorders, condFormats, condTypes,
-                    rowIdx, colIdx, totalRows, totalCols, exactRowHeightPt);
+                    rowIdx, colIdx, totalRows, totalCols, exactRowHeightPt, tblCellMar, tableStyleCellFill);
 
                 // Check if conditional format overrides font-size (needs class for CSS override)
                 bool hasTsf = cellStyle.Contains("__TSF__");
@@ -413,11 +456,16 @@ public partial class WordHandler
                 var diagSvg = TryBuildCellDiagonalSvg(cell);
                 if (diagSvg != null) sb.Append(diagSvg);
 
-                // hRule="exact": browsers ignore max-height on <td> (table layout
-                // forces cells to contain their content), so wrap content in an
-                // inner div with fixed height + overflow:hidden. The wrap also
-                // takes over vertical alignment via flex (the td's vertical-align
-                // applies to the wrap as a whole, not to content within it).
+                // hRule="exact": wrap content in an inner div whose flex column
+                // takes over vertical alignment (the td's vertical-align applies
+                // to the wrap as a whole, not to content within it). Use
+                // min-height as a floor rather than a fixed height + max-height +
+                // overflow:hidden — content taller than the exact value (e.g. a
+                // label plus several stacked checkbox SDTs) would otherwise be
+                // clipped to a single centered line, silently dropping the rest.
+                // Priority: content stays visible over honoring the exact height
+                // strictly (the R49/R31 don't-clip-content rule); Word shows the
+                // content. Content at/under the exact value keeps that height.
                 bool exactWrap = exactRowHeightPt.HasValue;
                 if (exactWrap)
                 {
@@ -426,7 +474,7 @@ public partial class WordHandler
                     if (vAlign == TableVerticalAlignmentValues.Center) justify = "center";
                     else if (vAlign == TableVerticalAlignmentValues.Bottom) justify = "flex-end";
                     else justify = "flex-start";
-                    sb.Append($"<div style=\"height:{exactRowHeightPt:0.#}pt;max-height:{exactRowHeightPt:0.#}pt;overflow:hidden;display:flex;flex-direction:column;justify-content:{justify}\">");
+                    sb.Append($"<div style=\"min-height:{exactRowHeightPt:0.#}pt;display:flex;flex-direction:column;justify-content:{justify}\">");
                 }
 
                 // Render cell content in XML order. OOXML lets paragraphs and
@@ -460,6 +508,20 @@ public partial class WordHandler
                 {
                     if (child is Paragraph cellPara)
                     {
+                        // Display equation inside a cell: a <w:p> whose content is
+                        // an <m:oMathPara>/<m:oMath> wrapper. Body paragraphs route
+                        // these to a katex-formula span (HtmlPreview.cs ~line 2362);
+                        // the cell path historically lacked the branch, so in-cell
+                        // formulas (e.g. §7 Indicadores fractions) rendered blank.
+                        // Mirror the body emit so cell math surfaces identically.
+                        var cellOMath = cellPara.ChildElements.FirstOrDefault(e => e.LocalName == "oMathPara" || e.LocalName == "oMath" || e is M.Paragraph || e is M.OfficeMath);
+                        if (cellOMath != null)
+                        {
+                            CloseCellList();
+                            var mathLatex = FormulaParser.ToLatex(cellOMath);
+                            sb.Append($"<div class=\"equation\"><span class=\"katex-formula\" data-formula=\"{HtmlEncodeAttr(mathLatex)}\" data-display=\"true\"></span></div>");
+                            return;
+                        }
                         var listStyle = GetParagraphListStyle(cellPara);
                         if (listStyle != null)
                         {
@@ -468,13 +530,30 @@ public partial class WordHandler
                         }
                         CloseCellList();
                         var text = GetParagraphText(cellPara);
-                        var runs = GetAllRuns(cellPara);
                         var pCss = GetParagraphInlineCss(cellPara);
                         sb.Append("<div");
                         if (!string.IsNullOrEmpty(pCss))
                             sb.Append($" style=\"{pCss}\"");
                         sb.Append(">");
-                        bool hasVisibleContent = runs.Count > 0 || !string.IsNullOrWhiteSpace(text);
+                        // Emptiness must be judged by *visible* content, not raw
+                        // run count: a paragraph holding only a textless run (e.g.
+                        // an empty form-fill answer box whose <w:r> carries just an
+                        // rPr) has runs.Count > 0 yet renders nothing, so the div
+                        // collapsed to ~0 height and the row floor disappeared.
+                        // Word still draws a one-line-tall empty box (line height =
+                        // paragraph-mark run font). Treat a run as visible only when
+                        // it carries text/drawing/break/tab/symbol/picture/field, so
+                        // such empties get the &nbsp; placeholder and the line box
+                        // forms at the resolved line-height (pCss carries it).
+                        bool hasVisibleContent = !string.IsNullOrWhiteSpace(text)
+                            || GetAllRuns(cellPara).Any(r =>
+                                r.Descendants<Text>().Any(t => !string.IsNullOrEmpty(t.Text))
+                                || r.Descendants<Drawing>().Any()
+                                || r.Descendants<Break>().Any()
+                                || r.Descendants<TabChar>().Any()
+                                || r.Descendants<SymbolChar>().Any()
+                                || r.GetFirstChild<FieldChar>() != null
+                                || r.ChildElements.Any(c => c.LocalName == "pict"));
                         RenderParagraphContentHtml(sb, cellPara);
                         if (!hasVisibleContent) sb.Append("&nbsp;");
                         sb.Append("</div>");
@@ -546,6 +625,47 @@ public partial class WordHandler
             if (style == null) break;
             var borders = style.StyleTableProperties?.TableBorders;
             if (borders != null) return borders;
+            currentId = style.BasedOn?.Val?.Value;
+        }
+        return null;
+    }
+
+    /// <summary>Resolve the default cell margin (&lt;w:tblCellMar&gt;) from a
+    /// table style (walking the basedOn chain). Mirrors ResolveTableStyleBorders
+    /// — the first style in the chain that declares a tblCellMar wins.</summary>
+    private TableCellMarginDefault? ResolveTableStyleCellMargin(string styleId)
+    {
+        var visited = new HashSet<string>();
+        var currentId = styleId;
+        while (currentId != null && visited.Add(currentId))
+        {
+            var style = FindStyleById(currentId);
+            if (style == null) break;
+            var cm = style.StyleTableProperties?.TableCellMarginDefault;
+            if (cm != null) return cm;
+            currentId = style.BasedOn?.Val?.Value;
+        }
+        return null;
+    }
+
+    /// <summary>Resolve the base cell shading (&lt;w:style&gt;&lt;w:tcPr&gt;&lt;w:shd&gt;)
+    /// from a table style (walking the basedOn chain). Mirrors
+    /// ResolveTableStyleBorders — the first style in the chain that declares a
+    /// base tcPr/shd wins. This is the table-style whole-table cell fill (e.g. a
+    /// dark-list table whose base tcPr paints every cell blue and base rPr writes
+    /// white text); without it the white run color lands on the default white cell
+    /// and the labels render as an invisible empty frame. Conditional-format
+    /// (tblStylePr firstRow/band…) shd and direct cell shd both override this.</summary>
+    private Shading? ResolveTableStyleCellShading(string styleId)
+    {
+        var visited = new HashSet<string>();
+        var currentId = styleId;
+        while (currentId != null && visited.Add(currentId))
+        {
+            var style = FindStyleById(currentId);
+            if (style == null) break;
+            var shd = style.StyleTableCellProperties?.GetFirstChild<Shading>();
+            if (shd != null) return shd;
             currentId = style.BasedOn?.Val?.Value;
         }
         return null;
@@ -767,7 +887,9 @@ public partial class WordHandler
             cellListTag = null;
         }
 
-        var (lvlLeft, lvlHanging) = GetListLevelIndentFull(numId, ilvl);
+        // BUG-R105: paragraph-direct <w:ind> overrides the numbering-level
+        // indentation (same as the body path).
+        var (lvlLeft, lvlHanging) = ResolveListIndent(para, numId, ilvl);
         var indentPt = lvlLeft / 20.0;
         if (indentPt < 18) indentPt = 18;
         var hangingPt = lvlHanging / 20.0;

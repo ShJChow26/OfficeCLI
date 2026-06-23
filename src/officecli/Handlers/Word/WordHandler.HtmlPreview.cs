@@ -101,12 +101,19 @@ public partial class WordHandler
     /// Generate a self-contained HTML file that previews the Word document
     /// with formatting, tables, images, and lists.
     /// </summary>
-    public string ViewAsHtml(string? pageFilter = null)
+    /// <param name="gridCols">When &gt; 0, render every page tiled into a
+    /// thumbnail contact-sheet grid this many columns wide (screenshot mode).
+    /// Mirrors pptx's HTML grid; <paramref name="pageFilter"/> is ignored
+    /// (the grid always shows the whole document).</param>
+    /// <param name="gridCellWpx">Exact thumbnail cell width in CSS px. The CLI
+    /// computes this from the viewport width and column count so the C# height
+    /// math and the in-browser layout agree exactly.</param>
+    public string ViewAsHtml(string? pageFilter = null, int gridCols = 0, int gridCellWpx = 0)
     {
         using var _cul = InvariantCultureScope.Enter();
         try
         {
-            return ViewAsHtmlCore(pageFilter);
+            return ViewAsHtmlCore(pageFilter, gridCols, gridCellWpx);
         }
         catch (System.Xml.XmlException)
         {
@@ -119,7 +126,7 @@ public partial class WordHandler
         }
     }
 
-    private string ViewAsHtmlCore(string? pageFilter)
+    private string ViewAsHtmlCore(string? pageFilter, int gridCols = 0, int gridCellWpx = 0)
     {
         _ctx = new HtmlRenderContext();
         ResolveThemeCjkFont();
@@ -339,9 +346,12 @@ public partial class WordHandler
         // original behavior.
         var firstSection = CollectSections(body).FirstOrDefault()
             ?? _doc.MainDocumentPart?.Document?.Body?.GetFirstChild<SectionProperties>();
-        // CSS columns need a bounded height to balance — min-height alone
-        // leaves the body unbounded so all content stacks in column 1 and
-        // overflows the page. Use the doc-level pgLayout body height.
+        // CSS columns need a height floor to balance — with no height the body
+        // is unbounded so all content stacks in column 1 and overflows the page.
+        // BuildColBodyStyle applies this as `min-height` (not fixed `height`) so
+        // a section whose content exceeds two columns can grow the box downward
+        // instead of overprinting a wrapped-back third column (BUG(cols-overprint,
+        // R85)). Use the doc-level pgLayout body height as the floor.
         var colBodyHeightPt = pgLayout.HeightPt - pgLayout.MarginTopPt - pgLayout.MarginBottomPt;
 
         // Per-section page layout (#7a00): each page carries one or more
@@ -372,6 +382,14 @@ public partial class WordHandler
         {
             var pgContent = pageList[i];
             var sectMatches = sectRegex.Matches(pgContent);
+            // BUG(trailing-continuous-cols, R87): remember the FIRST section
+            // marker on this page before the markers are stripped below — the
+            // page-body column decision needs it to detect a fewer-col→multi-col
+            // continuous transition within one page (trailing 2-col leaking onto
+            // earlier 1-col content). -1 = no marker (inherits previous page).
+            int firstSectIdxOnPage = sectMatches.Count > 0
+                ? int.Parse(sectMatches[0].Groups[1].Value)
+                : -1;
             if (sectMatches.Count > 0)
             {
                 var lastIdx = int.Parse(sectMatches[^1].Groups[1].Value);
@@ -482,6 +500,26 @@ public partial class WordHandler
             var colSectionForPage = (activeSectionIdx >= 0 && activeSectionIdx < sections.Count)
                 ? sections[activeSectionIdx]
                 : firstSection;
+            // BUG(trailing-continuous-cols, R87): when this page CONTAINS a
+            // continuous section transition from a fewer-col section into a
+            // multi-col one (e.g. a 1-col paper body whose trailing body sectPr
+            // is 2-col References), the multi-col content is already wrapped in
+            // its own scoped <div column-count> by RenderBodyHtml. Applying the
+            // active (last) section's multi-col to the WHOLE page-body here would
+            // reverse-leak it onto the earlier 1-col content. So when the page's
+            // FIRST section has fewer columns than the active section, the
+            // page-body keeps the FIRST section's column count and lets the inner
+            // scoped wrapper own the multi-col region. Single-section pages (first
+            // marker == active) and inline-multi-col pages (R85, active is already
+            // the multi-col inline section appearing first on its page) are
+            // unaffected.
+            if (firstSectIdxOnPage >= 0 && firstSectIdxOnPage < sections.Count
+                && firstSectIdxOnPage != activeSectionIdx
+                && GetSectionColumnCount(sections[firstSectIdxOnPage])
+                     < GetSectionColumnCount(colSectionForPage))
+            {
+                colSectionForPage = sections[firstSectIdxOnPage];
+            }
             var colBodyStyle = BuildColBodyStyle(colSectionForPage, colBodyHeightPt);
             sb.Append($"<div class=\"page-body\"{colBodyStyle}>");
             sb.Append(pageList[i]);
@@ -549,6 +587,12 @@ public partial class WordHandler
         sb.AppendLine("  })();");
         // Auto-pagination: measure content and split overflowing pages
         sb.AppendLine($"  var maxBodyH={bodyHeightPt:0.#}*96/72;"); // pt to px (96dpi)
+        // Top margin (= padding-top of .page, the w:top reserve below which the
+        // body starts) and header distance, in px — used by adjustHeaderPadding
+        // to detect when header content is taller than the top margin and must
+        // push the body down (Word behaviour) rather than overlap it.
+        sb.AppendLine($"  var topMarginPx={pgLayout.MarginTopPt:0.#}*96/72;");
+        sb.AppendLine($"  var headerDistPx={pgLayout.HeaderDistancePt:0.#}*96/72;");
         sb.AppendLine("  var ftpl=" + JsStringLiteral(footerTemplate) + ";");
         // Header template cloned per paginated page. Continuation pages (2+)
         // never carry the first-page (titlePg) header — use the section's
@@ -616,7 +660,42 @@ public partial class WordHandler
     var pos=getComputedStyle(el).position;
     return pos==='absolute'||pos==='fixed';
   }
+  // Tall-header reflow: Word pushes the body down when the header content is
+  // taller than the top margin lets it sit above the body. Our .doc-header is
+  // position:absolute (R47, so a full-bleed cover banner can paint behind the
+  // body without reserving space), which means normal-flow header content
+  // (logo + title, an address block) overlaps the body's first paragraph when
+  // it exceeds the top margin. Measure each header's REQUIRED bottom from its
+  // own in-flow children only — full-page background / watermark layers inside
+  // the header are position:absolute (isOutOfFlow) and report ~page-height, so
+  // counting them would push every body to page 2. The full-bleed cover stays
+  // behind the body (no push), exactly the R47 design. When the in-flow header
+  // bottom exceeds the page's current top padding, grow the page's padding-top
+  // so the flex .page-body starts below the header. Idempotent: re-derives the
+  // needed padding from the header geometry each call (base = topMarginPx).
+  function adjustHeaderPadding(page){
+    var hdr=page.querySelector('.doc-header');
+    if(!hdr)return;
+    // hdr is absolute at top:headerDistPx; its in-flow content bottom relative
+    // to the page top = headerDistPx + (max in-flow child bottom within hdr).
+    var hdrTop=hdr.offsetTop; // == headerDistPx (absolute top within .page)
+    var contentBottom=0;
+    Array.from(hdr.children).forEach(function(c){
+      if(isOutOfFlow(c))return; // skip full-page bg / watermark layers
+      var b=c.offsetTop+c.offsetHeight; // relative to hdr's padding box
+      if(b>contentBottom)contentBottom=b;
+    });
+    if(contentBottom<=0)return;
+    // Small bottom gap so body doesn't butt against the header's last line.
+    var needed=hdrTop+contentBottom+(headerDistPx*0.5);
+    var base=topMarginPx;
+    var pad=needed>base?needed:base;
+    page.style.paddingTop=pad+'px';
+  }
   function paginate(){
+    // Reflow tall headers BEFORE measuring body overflow so the pushed-down
+    // body height is accounted for when picking split points.
+    document.querySelectorAll('.page').forEach(adjustHeaderPadding);
     var pages=document.querySelectorAll('.page');
     // Sync mode + page filter: bail once pages beyond max-requested exist
     // and pages 1..maxReq are stable. Avoids paginating 100-page docs to
@@ -924,6 +1003,9 @@ public partial class WordHandler
       });
       if(ch>maxBodyH-fh+2 && visibleCount>1){again=true;break;}
     }
+    // Pages created in this (terminal, non-recursing) pass still need their
+    // cloned header reflowed — adjustHeaderPadding is idempotent.
+    if(!again)document.querySelectorAll('.page').forEach(adjustHeaderPadding);
     if(again){if(window._wpSync)paginate();else setTimeout(paginate,0);}
     else if(window._wpSync){
       positionFootnotes();wrapFloats();applyLineNumbers();
@@ -933,8 +1015,8 @@ public partial class WordHandler
       document.querySelectorAll('a[id^=""_Toc""]').forEach(function(a){
         for(var i=0;i<pgs.length;i++) if(pgs[i].contains(a)){pmap.push(a.id+'='+(i+1));break;}
       });
-      applyPageFilter();
-      flushScreenshotPage();
+      if(window._gridCols>0){layoutGrid(window._gridCols);}
+      else{applyPageFilter();flushScreenshotPage();}
       document.title='PAGES:'+pgs.length+(pmap.length?'|MAP:'+pmap.join(','):'');
     }
     else{setTimeout(positionFootnotes,0);setTimeout(wrapFloats,0);setTimeout(applyLineNumbers,0);setTimeout(applyPageFilter,0);setTimeout(function(){scalePages(false);},0);}
@@ -1094,6 +1176,37 @@ public partial class WordHandler
     var w=page.closest('.page-wrapper');if(w)w.style.margin='0';
     document.querySelectorAll('.page-wrapper').forEach(function(pw){if(pw!==w)pw.style.display='none';});
   }
+  // Contact-sheet grid: scale every page down to a fixed cell width and let the
+  // body flex-wrap tile them into _gridCols columns. cellW comes from the CLI
+  // (window._gridCellW) so the captured viewport height (computed C#-side from
+  // page count) matches the laid-out grid exactly. Mirrors flushScreenshotPage's
+  // chrome-stripping but for ALL pages instead of clipping to one.
+  function layoutGrid(cols){
+    if(!cols||cols<1)return;
+    var gap=12,pad=12;
+    // Derive cellW from the live content width (excludes any scrollbar) so the
+    // requested column count always fits — trusting a CLI-passed width risks the
+    // scrollbar/rounding pushing the last column to a new row. Floor for safety.
+    var avail=document.body.clientWidth-2*pad;
+    var cellW=Math.floor((avail-(cols-1)*gap)/cols);
+    if(cellW<1)cellW=window._gridCellW||220;
+    var wraps=Array.prototype.filter.call(document.querySelectorAll('.page-wrapper'),function(w){return w.offsetParent!==null;});
+    wraps.forEach(function(wrapper){
+      var page=wrapper.querySelector('.page');if(!page)return;
+      var pageW=page.offsetWidth,pageH=page.offsetHeight;
+      var s=pageW>0?cellW/pageW:1;
+      page.style.transition='none';page.style.transformOrigin='top left';
+      page.style.transform='scale('+s+')';
+      page.style.boxShadow='none';page.style.borderRadius='0';
+      wrapper.style.transition='none';wrapper.style.margin='0';
+      wrapper.style.width=cellW+'px';wrapper.style.height=Math.round(pageH*s)+'px';
+      wrapper.style.overflow='hidden';
+    });
+    var b=document.body;
+    b.style.display='flex';b.style.flexWrap='wrap';
+    b.style.alignContent='flex-start';b.style.justifyContent='center';b.style.alignItems='flex-start';
+    b.style.gap=gap+'px';b.style.padding=pad+'px';
+  }
   function _loadKatexLazy(cb){
     // Watch mode: doc may start formula-free (KaTeX tags omitted), then
     // gain a formula via SSE patch. Inject CSS + JS on demand; on load,
@@ -1179,15 +1292,25 @@ public partial class WordHandler
         // Pass requested pages to JS for post-pagination filtering
         if (requestedPages != null && requestedPages.Count > 0)
             sb.AppendLine($"  window._requestedPages=[{string.Join(",", requestedPages)}];");
+        // Contact-sheet grid: tile every page into gridCols columns. cellW is
+        // supplied by the CLI (not derived from clientWidth) so the C# viewport
+        // height math and the in-browser layout use the identical cell size.
+        if (gridCols > 0)
+        {
+            sb.AppendLine($"  window._gridCols={gridCols};");
+            if (gridCellWpx > 0) sb.AppendLine($"  window._gridCellW={gridCellWpx};");
+        }
         sb.AppendLine(@"  var SCREENSHOT=location.hash.indexOf('screenshot')>=0||navigator.webdriver||/HeadlessChrome/.test(navigator.userAgent);
   window._wpSync=SCREENSHOT;
   if(SCREENSHOT){
     var rp=window._requestedPages;
-    if(rp&&rp.length===1&&rp[0]===1){
+    if(window._gridCols>0){paginate();}
+    else if(rp&&rp.length===1&&rp[0]===1){
       // Page 1 is the first .page before pagination — flush it directly, skipping
       // the full paginate pass. Other single pages go through paginate and flush
       // at its sync completion. flushScreenshotPage clips + drops the chrome.
       document.querySelectorAll('.page-wrapper:not(:first-of-type)').forEach(function(w){w.style.display='none';});
+      var _p1=document.querySelector('.page');if(_p1)adjustHeaderPadding(_p1);
       positionFootnotes();wrapFloats();applyLineNumbers();
       flushScreenshotPage();
     }else{paginate();}
@@ -1278,8 +1401,21 @@ public partial class WordHandler
             return justify != null ? $" style=\"justify-content:{justify}\"" : "";
         var colSep = sectCols?.Separator?.Value == true;
         var colSpacing = sectCols?.Space?.Value;
+        // BUG(cols-overprint, R85): use min-height (not fixed height) so the
+        // multi-column box can GROW past the page body height when the section's
+        // content exceeds two columns worth. With a fixed `height`, CSS
+        // multi-column has no page break to flow into — once both columns fill
+        // to that height, the overflow opens a THIRD column that wraps back to
+        // the top of the SAME bounded box and visually overprints the existing
+        // columns (right ~40% became unreadable). min-height keeps the same
+        // balanced height for short content (columns still balance at the
+        // minimum) but lets tall content extend the box downward so later
+        // columns stack below instead of overlapping. HTML has no true
+        // page break, so this multi-column block renders taller than Word's
+        // real paginated layout — accepted (content-visible > exact height,
+        // same no-clip principle as the rest of this campaign).
         return $" style=\"column-count:{colCount}"
-            + $";height:{colBodyHeightPt.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}pt"
+            + $";min-height:{colBodyHeightPt.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}pt"
             + (colSep ? ";column-rule:1px solid #000" : "")
             + (int.TryParse(colSpacing, out var csp) && csp > 0 ? $";column-gap:{csp / 20.0:0.##}pt" : "")
             + "\"";
@@ -1464,11 +1600,17 @@ public partial class WordHandler
                 gridLinePitchPt = lp / 20.0; // twips to pt
         }
 
-        // Default text color: docDefaults → theme dk1
+        // Default text color: explicit docDefaults w:color only; otherwise black.
+        // Word does NOT derive the default run color from theme dk1 — an
+        // uncolored run is "auto" (rendered black on a light backdrop). A
+        // brand-colored dk1 (e.g. srgbClr B82326) must not bleed onto every
+        // run that lacks an explicit w:color / themeColor. Runs that DO carry
+        // w:themeColor="text1"/"dark1" still resolve to dk1 via ResolveRunColor;
+        // auto-on-dark-bg reverse-out (R39) is handled separately in
+        // ResolveEffectiveBackgroundForRun.
         var color = "#000000";
         var cv = rPr?.Color?.Val?.Value;
         if (cv != null && cv != "auto" && IsHexColor(cv)) color = $"#{cv}";
-        else if (GetThemeColors().TryGetValue("dk1", out var dk1) && IsHexColor(dk1)) color = $"#{dk1}";
 
         // Space after: Normal style pPr → docDefaults pPr → 0
         double spaceAfterPt = 0;
@@ -2057,16 +2199,64 @@ public partial class WordHandler
             if (ei > 0 && elements[ei - 1] is Paragraph prevP
                 && prevP.ParagraphProperties?.GetFirstChild<SectionProperties>() is SectionProperties prevInlineSectPr)
             {
-                var sectType = prevInlineSectPr.GetFirstChild<SectionType>();
-                if (sectType?.Val?.Value == SectionMarkValues.NextPage
-                    || sectType?.Val?.Value == SectionMarkValues.EvenPage
-                    || sectType?.Val?.Value == SectionMarkValues.OddPage)
+                // ECMA-376 §17.6.22: an omitted <w:type> defaults to
+                // "nextPage" — the section break still starts a new page.
+                // Only "continuous" and the same-page "nextColumn" variant
+                // stay on the current page. Treating a missing type as
+                // "no break" merged consecutive sections onto one page, so the
+                // page's LAST <!--SECT:N--> marker (picked by sectMatches[^1])
+                // pointed at a later section than the page's real owner —
+                // flipping page-1 header/footer selection to the wrong
+                // section's variant.
+                var sectTypeVal = prevInlineSectPr.GetFirstChild<SectionType>()?.Val?.Value;
+                if (sectTypeVal != SectionMarkValues.Continuous
+                    && sectTypeVal != SectionMarkValues.NextColumn)
                 {
                     sb.Append("<!--PAGE_BREAK-->");
                 }
                 currentSectionIdx++;
                 sb.Append($"<!--SECT:{currentSectionIdx}-->");
                 ApplySectionFnSettings(allSections, currentSectionIdx);
+
+                // BUG(trailing-continuous-cols, R87): the TRAILING body sectPr
+                // (body.GetFirstChild<SectionProperties>(), the LAST entry of
+                // CollectSections) is never inline on a paragraph, so it never
+                // hits the inline-break multi-column branch below — that branch
+                // only fires for an inline sectPr ON a section-closing paragraph.
+                // When that trailing section is `continuous` AND multi-col (a
+                // 2-col References tail under a 1-col paper body), its multi-col
+                // layout otherwise falls through ONLY to the page-body-level
+                // BuildColBodyStyle, which applies it to the WHOLE page —
+                // reverse-leaking 2 columns onto the earlier 1-col body. Scope it
+                // here with its own column-count div so only the trailing content
+                // is multi-col; the page-body decision (above) keeps the earlier
+                // section's column count for the rest of the page.
+                // Narrowly gated to: (a) entering the LAST section, (b) which is
+                // the trailing body sectPr (not inline → not handled below),
+                // (c) a true column INCREASE vs the section we left. This cannot
+                // touch the inline-multi-col path (R85, handled by the branch
+                // below) or single-section docs (no advance happens).
+                var trailingBodySectPr = body.GetFirstChild<SectionProperties>();
+                if (!inMultiColumn
+                    && currentSectionIdx == allSections.Count - 1
+                    && allSections.Count >= 2
+                    && ReferenceEquals(allSections[currentSectionIdx], trailingBodySectPr))
+                {
+                    var enteredCols = GetSectionColumnCount(allSections[currentSectionIdx]);
+                    var leftCols = GetSectionColumnCount(allSections[currentSectionIdx - 1]);
+                    if (enteredCols > 1 && enteredCols > leftCols)
+                    {
+                        var sc = allSections[currentSectionIdx].GetFirstChild<Columns>();
+                        var sep = sc?.Separator?.Value == true;
+                        var space = sc?.Space?.Value;
+                        var gap = int.TryParse(space, out var sp) && sp > 0
+                            ? (sp / 20.0).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)
+                            : "36";
+                        sb.AppendLine($"<div style=\"column-count:{enteredCols};column-gap:{gap}pt"
+                            + (sep ? ";column-rule:1px solid #000" : "") + "\">");
+                        inMultiColumn = true;
+                    }
+                }
             }
 
             // Emit invisible anchors for watch scroll targeting. #6: a
@@ -2282,8 +2472,10 @@ public partial class WordHandler
                         pendingLiClose = false;
                     }
 
-                    // Get indentation from numbering level definition
-                    var (lvlLeft, lvlHanging) = GetListLevelIndentFull(numId, ilvl);
+                    // Get indentation from numbering level definition, then let
+                    // the paragraph's own <w:ind> override it (BUG-R105:
+                    // paragraph-direct indentation supersedes the level value).
+                    var (lvlLeft, lvlHanging) = ResolveListIndent(para, numId, ilvl);
                     var parentLeft = ilvl > 0 ? GetListLevelIndent(numId, ilvl - 1) : 0;
                     double indentPt;
                     if (isMultiLevel)
@@ -2876,6 +3068,16 @@ public partial class WordHandler
         // would show the wrong content.
         if (isFirstPageOfSection && sectHasTitlePg)
             return bundle.First ?? string.Empty;
+        // BUG-R101: titlePg OFF (or absent). Per ECMA-376 §17.10.6, the
+        // "first" variant is used ONLY when titlePg is set; with titlePg off
+        // the first page uses the DEFAULT header/footer (or nothing when no
+        // default is defined). Resolve to bundle.Default ?? "" here — never to
+        // fallbackHtml, which is the first content-bearing part in arbitrary
+        // part order and may be the "first" variant (e.g. a DRAFT watermark
+        // header referenced only as type="first"). Letting it leak put the
+        // first-page header on page 1 even though titlePg was off.
+        if (isFirstPageOfSection)
+            return bundle.Default ?? string.Empty;
         if (evenAndOddGlobal && pageIsEven)
         {
             if (bundle.Even != null) return bundle.Even;
@@ -2909,6 +3111,12 @@ public partial class WordHandler
             && sections[sectionIdx].GetFirstChild<TitlePage>() != null;
         if (isFirstPageOfSection && sectHasTitlePg)
             return flags.First;
+        // BUG-R101 mirror: titlePg off → first page uses Default (or none).
+        // Match PickHeaderFooter's "return bundle.Default ?? string.Empty":
+        // no fallback-part leak. When Default html is absent the empty string
+        // carries no field, so flags are (false, false).
+        if (isFirstPageOfSection)
+            return html.Default != null ? flags.Default : (false, false);
         if (evenAndOddGlobal && pageIsEven)
         {
             if (html.Even != null) return flags.Even;
@@ -3060,4 +3268,29 @@ public partial class WordHandler
     }
 
     private int GetListLevelIndent(int numId, int ilvl) => GetListLevelIndentFull(numId, ilvl).left;
+
+    /// <summary>BUG-R105: a list paragraph's own &lt;w:ind&gt; OVERRIDES the
+    /// numbering-level indentation (ECMA-376 §17.3.1.12 — paragraph-direct
+    /// indentation supersedes the value inherited from the referenced
+    /// &lt;w:lvl&gt;&lt;w:pPr&gt;&lt;w:ind&gt;). Override is per-attribute: a
+    /// paragraph that specifies only w:left keeps the level's hanging, etc.
+    /// Returns (left, hanging) in twips, starting from the numbering-level
+    /// values and replacing each slot the paragraph defines.</summary>
+    private (int left, int hanging) ResolveListIndent(
+        Paragraph para, int numId, int ilvl)
+    {
+        var (left, hanging) = GetListLevelIndentFull(numId, ilvl);
+        var ind = para.ParagraphProperties?.Indentation;
+        if (ind == null) return (left, hanging);
+        if (ind.Left?.Value is string ls && int.TryParse(ls, out var lt))
+            left = lt;
+        // hanging and firstLine are mutually exclusive in OOXML. A direct
+        // w:hanging replaces the level hanging; a direct w:firstLine clears
+        // any hanging (first-line indent is the negative-hanging counterpart).
+        if (ind.Hanging?.Value is string hs && int.TryParse(hs, out var ht))
+            hanging = ht;
+        else if (ind.FirstLine?.Value is string fs && int.TryParse(fs, out _))
+            hanging = 0;
+        return (left, hanging);
+    }
 }

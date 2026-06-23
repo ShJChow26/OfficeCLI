@@ -121,6 +121,13 @@ public partial class WordHandler
             tint: hasTint, shade: hasShade, lumMod: hasLumMod, lumOff: hasLumOff);
     }
 
+    // CONSISTENCY(shape-fill-css): this solidFill/gradFill/pattFill → CSS mapping
+    // is ~70% structurally duplicated by PowerPointHandler.GetShapeFillCss
+    // (Pptx/PowerPointHandler.HtmlPreview.Css.cs). They diverge on element access
+    // (untyped LocalName scan here vs SDK-typed GetFirstChild there) and ride
+    // different tint/shade extraction before both delegate to ColorMath. Deferred
+    // Core consolidation (e.g. Core/ShapeFillCss) — do NOT land as a one-handler
+    // special case; unify cross-handler in one pass once the docx fix-storm settles.
     private string ResolveShapeFillCss(OpenXmlElement? spPr)
     {
         if (spPr == null) return "";
@@ -503,6 +510,24 @@ public partial class WordHandler
         var vSpacingPropBefore = "margin-top";
         var vSpacingPropAfter = "margin-bottom";
 
+        // Continuous-shaded-box margin suppression. When consecutive paragraphs
+        // share an identical pBdr (the OOXML §17.3.1.24 border-merge condition
+        // handled below at the border block) AND each carries a paragraph-level
+        // shd fill, Word renders them as ONE continuous shaded box with no
+        // internal gap — the fill of one paragraph abuts the next. HTML paints
+        // a paragraph's background only inside its content/padding box, never
+        // into vertical margins, so any spaceBefore/spaceAfter (here typically
+        // an inherited docDefaults `w:after`) opens a white band between the
+        // strips and visually shreds the box. Mirror Word by zeroing the
+        // inter-paragraph margin on the joined edge — the same mechanism
+        // contextualSpacing uses — so the shaded strips touch. Scoped to the
+        // shd+identical-pBdr pair (a lone shaded paragraph, or shaded paragraphs
+        // with differing/absent borders, keeps its normal margin), so it does
+        // not perturb normal spacing, R66 border merge, or R80 table-style shd
+        // (table cells, not body paragraphs).
+        bool continuousShadeBefore = ParagraphJoinsShadedBox(para, para.PreviousSibling() as Paragraph);
+        bool continuousShadeAfter = ParagraphJoinsShadedBox(para, para.NextSibling() as Paragraph);
+
         if (spacing != null)
         {
             // contextualSpacing: when enabled and adjacent paragraph has the same style,
@@ -515,10 +540,10 @@ public partial class WordHandler
             var nextPara = para.NextSibling<Paragraph>();
             var prevStyleId = prevPara?.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
             var nextStyleId = nextPara?.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
-            bool suppressBefore = hasContextualSpacing && prevPara != null
-                && (prevStyleId ?? "") == (styleId ?? "");
-            bool suppressAfter = hasContextualSpacing && nextPara != null
-                && (nextStyleId ?? "") == (styleId ?? "");
+            bool suppressBefore = (hasContextualSpacing && prevPara != null
+                && (prevStyleId ?? "") == (styleId ?? "")) || continuousShadeBefore;
+            bool suppressAfter = (hasContextualSpacing && nextPara != null
+                && (nextStyleId ?? "") == (styleId ?? "")) || continuousShadeAfter;
 
             // Before/after spacing: w:before is in twips; w:beforeLines is in
             // hundredths of a line. Per ECMA-376 §17.3.1.33 beforeLines
@@ -639,21 +664,16 @@ public partial class WordHandler
                     // floor, the natural value applies.
                     var emitPt = rule == "atLeast" ? ResolveAtLeastPt(linePt, para) : linePt;
                     parts.Add($"line-height:{emitPt:0.##}pt");
-                    // #7b0001: when lineRule=exact pins the line box below
-                    // ~120% of the paragraph's font size, Word clips
-                    // over-tall glyphs. Emit overflow:hidden so tall glyphs
-                    // don't leak into neighboring lines.
-                    if (rule == "exact")
-                    {
-                        // Use the paragraph's principal (run) size, not the
-                        // style/doc-default, so an over-tall run triggers
-                        // clipping. Word clips when the exact box sits below
-                        // ~120% of the content's font size.
-                        var runSizePt = ResolveParaPrincipalSizePt(para)
-                            ?? ReadDocDefaults().SizePt;
-                        if (runSizePt > 0 && linePt < runSizePt * 1.2)
-                            parts.Add("overflow:hidden");
-                    }
+                    // lineRule=exact pins the line box to a fixed height, but
+                    // Word still shows the text — it does NOT erase a line whose
+                    // content is taller than the exact box; over-tall glyphs are
+                    // visually clipped at the box edge, not blanked out. The
+                    // earlier overflow:hidden (on a fixed box) blanked whole
+                    // labels/list-rows when the natural content height exceeded
+                    // the exact value (content loss). line-height alone reproduces
+                    // the fixed leading while keeping content visible; we no
+                    // longer emit overflow:hidden here. Priority: content visible
+                    // over strict exact height (R49/R31 don't-clip-content rule).
                 }
             }
 
@@ -690,10 +710,10 @@ public partial class WordHandler
             var nextPara = para.NextSibling<Paragraph>();
             var prevStyleId = prevPara?.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
             var nextStyleId = nextPara?.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
-            bool suppressBefore = hasContextualSpacing && prevPara != null
-                && (prevStyleId ?? "") == (styleId ?? "");
-            bool suppressAfter = hasContextualSpacing && nextPara != null
-                && (nextStyleId ?? "") == (styleId ?? "");
+            bool suppressBefore = (hasContextualSpacing && prevPara != null
+                && (prevStyleId ?? "") == (styleId ?? "")) || continuousShadeBefore;
+            bool suppressAfter = (hasContextualSpacing && nextPara != null
+                && (nextStyleId ?? "") == (styleId ?? "")) || continuousShadeAfter;
 
             // Word collapses adjacent spaceBefore/spaceAfter to max(prev.after, cur.before).
             // The HTML paragraphs are normal block-flow siblings, so their vertical margins
@@ -789,8 +809,22 @@ public partial class WordHandler
             ?? ResolveStyleParagraphBorders(pProps.ParagraphStyleId?.Val?.Value);
         if (pBdr != null)
         {
-            RenderBorderCss(parts, pBdr.TopBorder, "border-top");
-            RenderBorderCss(parts, pBdr.BottomBorder, "border-bottom");
+            // OOXML §17.3.1.24 border merging: when consecutive paragraphs carry
+            // an identical pBdr (same val/color/sz/space on each side, no explicit
+            // w:between), Word renders them as ONE continuous box — no internal
+            // top/bottom rule between the stacked paragraphs. HTML emits per-para
+            // borders, so without suppression the shared box shows a doubled
+            // horizontal divider that splits the logical box into stacked
+            // sub-boxes. Suppress the inner edge when the adjacent sibling shares
+            // the same pBdr: drop border-top if the previous sibling matches, drop
+            // border-bottom if the next sibling matches. Left/right always emit.
+            var prevBdr = ResolveSiblingParagraphBorders(para.PreviousSibling() as Paragraph);
+            var nextSiblingBdr = ResolveSiblingParagraphBorders(para.NextSibling() as Paragraph);
+            var suppressTop = pBdr.BetweenBorder == null && ParagraphBordersEqual(pBdr, prevBdr);
+            var suppressBottom = pBdr.BetweenBorder == null && ParagraphBordersEqual(pBdr, nextSiblingBdr);
+
+            if (!suppressTop) RenderBorderCss(parts, pBdr.TopBorder, "border-top");
+            if (!suppressBottom) RenderBorderCss(parts, pBdr.BottomBorder, "border-bottom");
             RenderBorderCss(parts, pBdr.LeftBorder, "border-left");
             RenderBorderCss(parts, pBdr.RightBorder, "border-right");
             // w:between draws a rule BETWEEN consecutive paragraphs that share
@@ -1272,14 +1306,9 @@ public partial class WordHandler
                             var linePt = Units.TwipsToPt(lv);
                             var emitPt = rule == "atLeast" ? ResolveAtLeastPt(linePt, para) : linePt;
                             parts.Add($"line-height:{emitPt:0.##}pt");
-                            // exact pins the box and clips over-tall glyphs.
-                            if (rule == "exact")
-                            {
-                                var runSizePt = ResolveParaPrincipalSizePt(para)
-                                    ?? ReadDocDefaults().SizePt;
-                                if (runSizePt > 0 && linePt < runSizePt * 1.2)
-                                    parts.Add("overflow:hidden");
-                            }
+                            // exact pins the leading but keeps content visible;
+                            // no overflow:hidden (would blank over-tall content —
+                            // see content-loss note in the paragraph path above).
                         }
                     }
                 }
@@ -1352,14 +1381,9 @@ public partial class WordHandler
                         var linePt = Units.TwipsToPt(lv);
                         var emitPt = rule == "atLeast" ? ResolveAtLeastPt(linePt, para) : linePt;
                         parts.Add($"line-height:{emitPt:0.##}pt");
-                        // exact pins the box and clips over-tall glyphs.
-                        if (rule == "exact")
-                        {
-                            var runSizePt = ResolveParaPrincipalSizePt(para)
-                                ?? ReadDocDefaults().SizePt;
-                            if (runSizePt > 0 && linePt < runSizePt * 1.2)
-                                parts.Add("overflow:hidden");
-                        }
+                        // exact pins the leading but keeps content visible;
+                        // no overflow:hidden (would blank over-tall content —
+                        // see content-loss note in the paragraph path above).
                     }
                 }
             }
@@ -1714,6 +1738,19 @@ public partial class WordHandler
             // behavior, so don't emit a redundant color for the common case.
             if (bgHex != null && IsColorDark(bgHex))
                 parts.Add("color:#FFFFFF");
+            // R102-2: an EXPLICIT run-level w:color val="auto" (Word's
+            // "Automatic" = black on a light backdrop) must beat any inherited
+            // color — notably the global `a { color:#2B579A }` rule when this
+            // run lives inside a <w:hyperlink> with rStyle="Hyperlink". OOXML
+            // direct run color (incl. auto) wins over the rStyle character
+            // style's color, so the email link renders black like Word, not the
+            // style's blue. Emitting nothing here would let the ancestor <a>
+            // blue leak through. Only fire on an explicit auto value: a plain
+            // Hyperlink run with NO run-level color (rProps.Color == null) keeps
+            // the inherited blue; the dark-bg reverse-video branch above already
+            // claimed the white case.
+            else if (rProps.Color?.Val?.Value == "auto")
+                parts.Add("color:#000000");
         }
 
         // Highlight
@@ -1968,17 +2005,28 @@ public partial class WordHandler
                         child.InnerXml, @"val=""([0-9A-Fa-f]{6})""");
                     var color = colorMatch.Success ? $"#{colorMatch.Groups[1].Value}" : "#000000";
                     var blurEmu = attrs.TryGetValue("blurRad", out var br) && long.TryParse(br, out var blurVal) ? blurVal : 0;
-                    var blurPx = blurEmu / EmuConverter.EmuPerPointF * 1.333;
+                    // Word renders w14:shadow on body text far more subtly than a
+                    // literal EMU→px translation suggests: the default preset
+                    // (blurRad=38100, dist=19050, dk1 @ full alpha) is barely
+                    // visible behind glyphs, not the heavy "1.4px 1.4px 4px"
+                    // smudge a direct mapping produces. Cap offset/blur to small
+                    // values and clamp opacity low so a document full of default
+                    // shadows reads clean instead of dirty/embossed.
+                    var blurPx = Math.Min(blurEmu / EmuConverter.EmuPerPointF * 1.333, 1.5);
                     var distEmu = attrs.TryGetValue("dist", out var dist) && long.TryParse(dist, out var distLong) ? distLong : 0;
                     var dirVal = attrs.TryGetValue("dir", out var dir) && long.TryParse(dir, out var dirLong) ? dirLong : 0;
                     var angleRad = dirVal / 60000.0 * Math.PI / 180.0;
-                    var distPx = distEmu / EmuConverter.EmuPerPointF * 1.333;
+                    var distPx = Math.Min(distEmu / EmuConverter.EmuPerPointF * 1.333, 0.8);
                     var xPx = distPx * Math.Sin(angleRad);
                     var yPx = distPx * Math.Cos(angleRad);
                     var alphaMatch = System.Text.RegularExpressions.Regex.Match(
                         child.InnerXml, @"alpha[^>]*val=""(\d+)""");
-                    if (alphaMatch.Success && double.TryParse(alphaMatch.Groups[1].Value, out var alphaVal) && alphaVal < 100000)
-                        color = HexToRgba(color, alphaVal / 100000.0);
+                    // Author alpha (if any) is a *ceiling*; Word never shows the
+                    // body-text shadow at full strength, so clamp to <=0.30.
+                    var shadowAlpha = alphaMatch.Success && double.TryParse(alphaMatch.Groups[1].Value, out var alphaVal)
+                        ? alphaVal / 100000.0
+                        : 1.0;
+                    color = HexToRgba(color, Math.Min(shadowAlpha, 0.30));
                     textShadows.Add($"{xPx:0.#}px {yPx:0.#}px {blurPx:0.#}px {color}");
                     break;
                 }
@@ -2119,10 +2167,20 @@ public partial class WordHandler
     private string GetTableCellInlineCss(TableCell cell, bool tableBordersNone, TableBorders? tblBorders = null,
         Dictionary<string, TableConditionalFormat>? condFormats = null, List<string>? condTypes = null,
         int rowIdx = 0, int colIdx = 0, int totalRows = 1, int totalCols = 1,
-        double? exactRowHeightPt = null)
+        double? exactRowHeightPt = null, TableCellMarginDefault? tblCellMar = null,
+        string? tableStyleCellFill = null)
     {
         var parts = new List<string>();
         var tcPr = cell.TableCellProperties;
+
+        // Table-style base cell shading (<w:style><w:tcPr><w:shd>) — the
+        // whole-table cell fill, lowest priority. Seeded first so a conditional
+        // format (tblStylePr) shd or a direct cell shd (both below) can override
+        // it via the RemoveAll(background-color:) path. Without this a dark-list
+        // table's blue fill never appears and its white run color (applied on the
+        // <table>) renders the cell labels as an invisible empty frame.
+        if (tableStyleCellFill != null)
+            parts.Add($"background-color:{tableStyleCellFill}");
 
         // Apply table-level borders: outer borders only on table edges, insideH/V on inner edges
         if (!tableBordersNone && tblBorders != null)
@@ -2198,7 +2256,27 @@ public partial class WordHandler
             }
         }
 
-        if (tcPr == null) return string.Join(";", parts);
+        if (tcPr == null)
+        {
+            // No cell properties at all: the global `th,td { padding:0 5.4pt }`
+            // CSS rule already supplies the Word default, so we normally emit
+            // nothing. But an explicit table-level tblCellMar (incl. 0) must
+            // still win over that CSS default — emit it inline so a tblCellMar
+            // L/R=0 table with bare cells doesn't fall back to 5.4pt.
+            if (tblCellMar != null)
+            {
+                var tTop = tblCellMar.TopMargin?.Width?.Value;
+                var tBot = tblCellMar.BottomMargin?.Width?.Value;
+                var tLeft = tblCellMar.TableCellLeftMargin?.Width?.Value;
+                var tRight = tblCellMar.TableCellRightMargin?.Width?.Value;
+                var pTop = tTop != null ? $"{Units.TwipsToPt(tTop):0.#}pt" : "0pt";
+                var pBot = tBot != null ? $"{Units.TwipsToPt(tBot):0.#}pt" : "0pt";
+                var pLeft = tLeft != null ? $"{Units.TwipsToPt((int)tLeft):0.#}pt" : "5.4pt";
+                var pRight = tRight != null ? $"{Units.TwipsToPt((int)tRight):0.#}pt" : "5.4pt";
+                parts.Add($"padding:{pTop} {pRight} {pBot} {pLeft}");
+            }
+            return string.Join(";", parts);
+        }
 
         // Shading / fill (supports theme colors) — direct cell shading overrides conditional
         var cellFill = ResolveShadingFill(tcPr.Shading);
@@ -2290,29 +2368,46 @@ public partial class WordHandler
             parts.Add("align-items:stretch");
         }
 
-        // Padding mirrors Word's tcMar exactly. Word's TableNormal default is
-        // top=0 left=108(=5.4pt) bottom=0 right=108(=5.4pt) twips, used when
-        // tcMar is absent. (An older CellPadVComp=3pt vertical compensation
-        // for line-height:1 ascender clipping is no longer needed since cli
-        // emits unitless line-height per font ratio.)
+        // Padding resolution mirrors Word's per-edge cell-margin cascade:
+        //   cell tcMar slot (incl. 0) > table tblCellMar slot (incl. 0) > Word
+        //   TableNormal default (top=0 left=108(=5.4pt) bottom=0 right=108).
+        // The earlier code consulted only the cell-level tcMar and fell back to
+        // the hardcoded 5.4pt L/R default whenever a cell lacked its own tcMar —
+        // ignoring an explicit table-level tblCellMar of 0 and stealing 10.8pt
+        // of horizontal content width per column under table-layout:fixed +
+        // box-sizing:border-box (header/number wrap+clip). A document that
+        // declares tblCellMar L/R=0 must yield td padding L/R=0. (The older
+        // CellPadVComp=3pt vertical compensation for line-height:1 ascender
+        // clipping is no longer needed since cli emits unitless line-height.)
         var margins = tcPr?.TableCellMargin;
         {
-            var padTop = Units.TwipsToPt(margins?.TopMargin?.Width?.Value ?? "0");
-            var padBot = Units.TwipsToPt(margins?.BottomMargin?.Width?.Value ?? "0");
-            var leftVal = margins?.LeftMargin?.Width?.Value ?? margins?.StartMargin?.Width?.Value;
-            var rightVal = margins?.RightMargin?.Width?.Value ?? margins?.EndMargin?.Width?.Value;
+            // top/bottom: TopMargin/BottomMargin on both tcMar and tblCellMar.
+            var topVal = margins?.TopMargin?.Width?.Value ?? tblCellMar?.TopMargin?.Width?.Value;
+            var botVal = margins?.BottomMargin?.Width?.Value ?? tblCellMar?.BottomMargin?.Width?.Value;
+            // left/right: tcMar exposes Left/Start + Right/End; tblCellMar uses
+            // the distinct TableCellLeftMargin / TableCellRightMargin children.
+            var leftVal = margins?.LeftMargin?.Width?.Value ?? margins?.StartMargin?.Width?.Value
+                          ?? tblCellMar?.TableCellLeftMargin?.Width?.Value.ToString();
+            var rightVal = margins?.RightMargin?.Width?.Value ?? margins?.EndMargin?.Width?.Value
+                           ?? tblCellMar?.TableCellRightMargin?.Width?.Value.ToString();
+            var padTop = topVal != null ? $"{Units.TwipsToPt(topVal):0.#}pt" : "0pt";
+            var padBot = botVal != null ? $"{Units.TwipsToPt(botVal):0.#}pt" : "0pt";
             var padLeft = leftVal != null ? $"{Units.TwipsToPt(leftVal):0.#}pt" : "5.4pt";
             var padRight = rightVal != null ? $"{Units.TwipsToPt(rightVal):0.#}pt" : "5.4pt";
-            parts.Add($"padding:{padTop:0.#}pt {padRight} {padBot:0.#}pt {padLeft}");
+            parts.Add($"padding:{padTop} {padRight} {padBot} {padLeft}");
         }
 
-        // hRule="exact": constrain cell to fixed height with overflow clipping.
-        // Browsers ignore max-height on <tr>, so this MUST live on the cell.
+        // hRule="exact": Word pins the row to the exact height but still SHOWS
+        // the cell text — it does not blank a cell whose content is taller than
+        // the exact value. The earlier fixed height + max-height + overflow:hidden
+        // hard-clipped over-tall cells to empty (lost evaluation labels, list
+        // rows). Emit the exact value as a min-height floor instead: normal cells
+        // (content ≤ exact) keep the exact height unchanged, while over-tall cells
+        // grow to show their content rather than going blank. Priority: content
+        // visible over strict exact height (R49/R31 don't-clip-content rule).
         if (exactRowHeightPt is double exH)
         {
-            parts.Add($"height:{exH:0.#}pt");
-            parts.Add($"max-height:{exH:0.#}pt");
-            parts.Add("overflow:hidden");
+            parts.Add($"min-height:{exH:0.#}pt");
         }
 
         return string.Join(";", parts);
@@ -2360,31 +2455,36 @@ public partial class WordHandler
     /// <summary>Resolve a diagonal cell border's color + stroke width (pt) the
     /// same way RenderBorderCss resolves box borders (sz eighths-of-pt, hex or
     /// themeColor with tint/shade, fallback black).</summary>
+    /// <summary>
+    /// Resolve a literal-or-theme color to a CSS color string, handling the
+    /// "#hex (unless auto) else themeColor + themeTint/themeShade else null"
+    /// chain shared by cell/diagonal borders and run color. Callers supply the
+    /// literal color and theme name (their attribute names differ — borders use
+    /// w:color/w:themeColor, run color uses w:val/typed ThemeColor) and the
+    /// fallback for the null case. themeTint/themeShade are read generically
+    /// off <paramref name="element"/>.
+    /// </summary>
+    private string? ResolveThemeAwareColor(OpenXmlElement element, string? literalColor, string? themeName)
+    {
+        if (literalColor != null && !literalColor.Equals("auto", StringComparison.OrdinalIgnoreCase) && IsHexColor(literalColor))
+            return $"#{literalColor}";
+        if (themeName != null && GetThemeColors().TryGetValue(themeName, out var tcHex))
+        {
+            var tint = element.GetAttributes().FirstOrDefault(a => a.LocalName == "themeTint").Value;
+            var shade = element.GetAttributes().FirstOrDefault(a => a.LocalName == "themeShade").Value;
+            return ApplyTintShade(tcHex, tint, shade);
+        }
+        return null;
+    }
+
     private (string color, double widthPt) ResolveDiagonalLine(OpenXmlElement border)
     {
         var sz = border.GetAttributes().FirstOrDefault(a => a.LocalName == "sz").Value;
         var color = border.GetAttributes().FirstOrDefault(a => a.LocalName == "color").Value;
+        var themeColor = border.GetAttributes().FirstOrDefault(a => a.LocalName == "themeColor").Value;
         var widthPt = sz != null && int.TryParse(sz, out var s) ? Math.Max(0.5, s / 8.0) : 1.0;
 
-        string cssColor;
-        if (color != null && !color.Equals("auto", StringComparison.OrdinalIgnoreCase) && IsHexColor(color))
-        {
-            cssColor = $"#{color}";
-        }
-        else
-        {
-            var themeColor = border.GetAttributes().FirstOrDefault(a => a.LocalName == "themeColor").Value;
-            if (themeColor != null && GetThemeColors().TryGetValue(themeColor, out var tcHex))
-            {
-                var tint = border.GetAttributes().FirstOrDefault(a => a.LocalName == "themeTint").Value;
-                var shade = border.GetAttributes().FirstOrDefault(a => a.LocalName == "themeShade").Value;
-                cssColor = ApplyTintShade(tcHex, tint, shade);
-            }
-            else
-            {
-                cssColor = "#000";
-            }
-        }
+        var cssColor = ResolveThemeAwareColor(border, color, themeColor) ?? "#000";
         return (cssColor, widthPt);
     }
 
@@ -2417,26 +2517,8 @@ public partial class WordHandler
         var width = $"{widthPt:0.##}pt";
 
         // Resolve color: try direct color, then themeColor with tint/shade
-        string cssColor;
-        if (color != null && !color.Equals("auto", StringComparison.OrdinalIgnoreCase)
-            && IsHexColor(color))
-        {
-            cssColor = $"#{color}";
-        }
-        else
-        {
-            var themeColor = border.GetAttributes().FirstOrDefault(a => a.LocalName == "themeColor").Value;
-            if (themeColor != null && GetThemeColors().TryGetValue(themeColor, out var tcHex))
-            {
-                var tint = border.GetAttributes().FirstOrDefault(a => a.LocalName == "themeTint").Value;
-                var shade = border.GetAttributes().FirstOrDefault(a => a.LocalName == "themeShade").Value;
-                cssColor = ApplyTintShade(tcHex, tint, shade);
-            }
-            else
-            {
-                cssColor = "#000";
-            }
-        }
+        var themeColor = border.GetAttributes().FirstOrDefault(a => a.LocalName == "themeColor").Value;
+        var cssColor = ResolveThemeAwareColor(border, color, themeColor) ?? "#000";
 
         parts.Add($"{cssProp}:{width} {style} {cssColor}");
 
@@ -2453,17 +2535,7 @@ public partial class WordHandler
     private string? ResolveRunColor(DocumentFormat.OpenXml.Wordprocessing.Color? color)
     {
         if (color == null) return null;
-        var colorVal = color.Val?.Value;
-        if (colorVal != null && colorVal != "auto" && IsHexColor(colorVal))
-            return $"#{colorVal}";
-        var tcName = color.ThemeColor?.InnerText;
-        if (tcName != null && GetThemeColors().TryGetValue(tcName, out var tcHex))
-        {
-            var tint = color.GetAttributes().FirstOrDefault(a => a.LocalName == "themeTint").Value;
-            var shade = color.GetAttributes().FirstOrDefault(a => a.LocalName == "themeShade").Value;
-            return ApplyTintShade(tcHex, tint, shade);
-        }
-        return null;
+        return ResolveThemeAwareColor(color, color.Val?.Value, color.ThemeColor?.InnerText);
     }
 
     /// <summary>
@@ -2814,6 +2886,73 @@ public partial class WordHandler
         return null;
     }
 
+    // Resolve a paragraph's effective shd fill (direct shd, else style chain).
+    private string? ResolveParagraphShadeFill(Paragraph? para)
+    {
+        if (para == null) return null;
+        return ResolveShadingFill(para.ParagraphProperties?.Shading)
+            ?? ResolveParagraphShadingFromStyle(para);
+    }
+
+    // True when `para` and an adjacent `sibling` form ONE continuous shaded box
+    // (OOXML §17.3.1.24 border merge over a paragraph-shd fill): both carry a
+    // resolved shd fill AND an identical four-side pBdr with no w:between. This
+    // is the precondition for suppressing the inter-paragraph margin so the
+    // shaded strips abut (HTML never paints background into a vertical margin).
+    // The pBdr-equality + no-between gate matches the border-merge suppression
+    // in GetParagraphInlineCss, so the margin join and the border join stay in
+    // lockstep. A lone shaded paragraph, or shaded paragraphs whose borders
+    // differ/are absent, returns false and keeps its normal margin.
+    private bool ParagraphJoinsShadedBox(Paragraph para, Paragraph? sibling)
+    {
+        if (sibling == null) return false;
+        if (ResolveParagraphShadeFill(para) == null) return false;
+        if (ResolveParagraphShadeFill(sibling) == null) return false;
+        var pBdr = para.ParagraphProperties?.ParagraphBorders
+            ?? ResolveStyleParagraphBorders(para.ParagraphProperties?.ParagraphStyleId?.Val?.Value);
+        if (pBdr == null || pBdr.BetweenBorder != null) return false;
+        var sibBdr = ResolveSiblingParagraphBorders(sibling);
+        if (sibBdr?.BetweenBorder != null) return false;
+        return ParagraphBordersEqual(pBdr, sibBdr);
+    }
+
+    // Resolve a sibling paragraph's effective pBdr (direct pBdr, else style
+    // chain) — same resolution as the main pBdr lookup, for border-merge
+    // comparison against the current paragraph.
+    private ParagraphBorders? ResolveSiblingParagraphBorders(Paragraph? sibling)
+    {
+        if (sibling == null) return null;
+        return sibling.ParagraphProperties?.ParagraphBorders
+            ?? ResolveStyleParagraphBorders(sibling.ParagraphProperties?.ParagraphStyleId?.Val?.Value);
+    }
+
+    // Two pBdr blocks are "the same continuous box" (OOXML §17.3.1.24 merge)
+    // when their four outer sides each match on val/color/sz/space. A null
+    // sibling pBdr never matches. Border elements are compared by their
+    // material attributes (not OuterXml) so namespace/attribute-order noise
+    // doesn't defeat the match.
+    private static bool ParagraphBordersEqual(ParagraphBorders? a, ParagraphBorders? b)
+    {
+        if (a == null || b == null) return false;
+        return BorderAttrsEqual(a.TopBorder, b.TopBorder)
+            && BorderAttrsEqual(a.BottomBorder, b.BottomBorder)
+            && BorderAttrsEqual(a.LeftBorder, b.LeftBorder)
+            && BorderAttrsEqual(a.RightBorder, b.RightBorder);
+    }
+
+    private static bool BorderAttrsEqual(OpenXmlElement? x, OpenXmlElement? y)
+    {
+        if (x == null && y == null) return true;
+        if (x == null || y == null) return false;
+        static string? Attr(OpenXmlElement e, string name) =>
+            e.GetAttributes().FirstOrDefault(at => at.LocalName == name).Value;
+        return Attr(x, "val") == Attr(y, "val")
+            && Attr(x, "color") == Attr(y, "color")
+            && Attr(x, "themeColor") == Attr(y, "themeColor")
+            && Attr(x, "sz") == Attr(y, "sz")
+            && Attr(x, "space") == Attr(y, "space");
+    }
+
     // Resolved bold state for a pStyle chain: true → chain explicitly bold,
     // false → chain explicitly NOT bold, null → unspecified. Distinguishing
     // the three matters for headings: the Word `Title` style ships no <w:b/>
@@ -2965,12 +3104,13 @@ public partial class WordHandler
             min-height: {pageH}; line-height: {lh}; font-size: {sz}; position: relative; overflow-x: auto;
             display: flex; flex-direction: column; font-kerning: none; letter-spacing: 0;
             transform-origin: left top; transition: transform 0.15s ease;
+            isolation: isolate;
             }}
         /* The white page fill lives on a pseudo-element behind everything so a
            behind-text float (z-index:-1) paints ON the page, not under it. A
            background directly on .page would sit at the stacking-context root and
            hide any negative-z-index child (watermark/behind-doc image). */
-        .page::before {{ content: ""; position: absolute; inset: 0; background: white;
+        .page::before {{ content: ''; position: absolute; inset: 0; background: white;
             border-radius: 4px; z-index: -2; }}
         /* break-word (not anywhere): a Latin word is only broken when it cannot
            fit on a line BY ITSELF; an oversized word beside a float first wraps
@@ -2982,6 +3122,12 @@ public partial class WordHandler
         .page-body {{ flex: 1; display: flex; flex-direction: column; text-autospace: ideograph-alpha ideograph-numeric; overflow-wrap: break-word; {hyphensCss} }}
         /* Multi-column sections: flex ignores column-count; switch to block. */
         .page-body[style*=""column-count""] {{ display: block; }}
+        /* A table is typically full text-column width; inside a multi-column
+           section it cannot fit one narrow column and would overflow into and
+           overprint the adjacent column. Let tables span all columns (Word
+           renders a full-width table across the section, with body text
+           flowing in columns above/below it). */
+        [style*=""column-count""] > table {{ column-span: all; }}
         /* Continuation page-bodies (created by pagination JS when content
            overflows): the segment leader was already at its computed offset
            in the source body, so its server-rendered margin-top must be

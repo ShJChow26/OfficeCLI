@@ -1642,27 +1642,10 @@ public static partial class WordBatchEmitter
                 foreach (var (k, v) in FilterEmittableProps(bodyParas[0].Format))
                 {
                     if (v == null) continue;
-                    bool isParaKey = k.StartsWith("markRPr.", StringComparison.OrdinalIgnoreCase)
-                        || k.StartsWith("pbdr.", StringComparison.OrdinalIgnoreCase)
-                        || k is "shading" or "shd"
-                        || k is "lineSpacing" or "lineRule" or "spaceBefore" or "spaceAfter"
-                              or "spaceBeforeLines" or "spaceAfterLines" or "alignment" or "align"
-                              or "direction" or "leftIndent" or "rightIndent" or "firstLine"
-                              or "indent" or "firstLineIndent" or "hangingIndent"
-                              or "hanging" or "contextualSpacing" or "spaceBeforeAuto" or "spaceAfterAuto"
-                          // BUG-DUMP-NOTE-PPR-SWEEP: the rest of the direct
-                          // paragraph-formatting vocabulary the body readback emits and
-                          // ApplyParagraphLevelProperty applies — forwarded here so a
-                          // note/comment first paragraph keeps them (they were dropped
-                          // by this curated allowlist). (framePr / textDirection /
-                          // cnfStyle have no ApplyParagraphLevelProperty case yet, so
-                          // they stay out to avoid spurious unsupported warnings.)
-                          or "keepNext" or "keepLines" or "pageBreakBefore" or "widowControl"
-                          or "suppressLineNumbers" or "suppressAutoHyphens" or "suppressOverlap"
-                          or "kinsoku" or "wordWrap" or "overflowPunct" or "topLinePunct"
-                          or "autoSpaceDE" or "autoSpaceDN" or "adjustRightInd" or "snapToGrid"
-                          or "mirrorIndents" or "textAlignment" or "outlineLvl" or "textboxTightWrap";
-                    if (isParaKey && !props.ContainsKey(k))
+                    // allowNumPr:false — AddComment has no <w:numPr> rebuild path
+                    // (unlike AddFootnote/AddEndnote), so a comment's first-para
+                    // list membership is not forwarded. See IsForwardableNoteFirstParaKey.
+                    if (IsForwardableNoteFirstParaKey(k, allowNumPr: false) && !props.ContainsKey(k))
                         props[k] = v.ToString()!;
                 }
             }
@@ -2147,47 +2130,11 @@ public static partial class WordBatchEmitter
             foreach (var (k, v) in FilterEmittableProps(bodyParas[0].Format))
             {
                 if (v == null) continue;
-                bool isParaKey = k.StartsWith("markRPr.", StringComparison.OrdinalIgnoreCase)
-                    // BUG-DUMP-NOTE-PBDR: a note's first paragraph can carry a
-                    // paragraph border (<w:pBdr>) or shading — the body paragraph
-                    // readback emits these as pbdr.<side>(.sz/.color/.space) and
-                    // shading; ApplyFootnoteEndnoteFormatKeys -> ApplyParagraphLevel
-                    // Property already applies them, but they were absent from this
-                    // forward allowlist so a bordered footnote paragraph lost its
-                    // border on round-trip. Forward the whole pbdr.* family + shading.
-                    || k.StartsWith("pbdr.", StringComparison.OrdinalIgnoreCase)
-                    || k is "shading" or "shd"
-                    || k is "lineSpacing" or "lineRule" or "spaceBefore" or "spaceAfter"
-                          or "spaceBeforeLines" or "spaceAfterLines" or "alignment" or "align"
-                          or "direction" or "leftIndent" or "rightIndent" or "firstLine"
-                          // canonical paragraph indent keys (the names the
-                          // paragraph readback actually emits — the legacy
-                          // aliases above never matched, so a footnote whose
-                          // first paragraph overrides the style indent with
-                          // <w:ind w:left="0" w:firstLine="0"/> re-wrapped on
-                          // replay and shifted the page bottom):
-                          or "indent" or "firstLineIndent" or "hangingIndent"
-                          or "hanging" or "contextualSpacing" or "spaceBeforeAuto" or "spaceAfterAuto"
-                          // BUG-DUMP-NOTE-PPR-SWEEP: the rest of the direct
-                          // paragraph-formatting vocabulary the body readback emits and
-                          // ApplyParagraphLevelProperty applies — forwarded here so a
-                          // note/comment first paragraph keeps them (they were dropped
-                          // by this curated allowlist). (framePr / textDirection /
-                          // cnfStyle have no ApplyParagraphLevelProperty case yet, so
-                          // they stay out to avoid spurious unsupported warnings.)
-                          or "keepNext" or "keepLines" or "pageBreakBefore" or "widowControl"
-                          or "suppressLineNumbers" or "suppressAutoHyphens" or "suppressOverlap"
-                          or "kinsoku" or "wordWrap" or "overflowPunct" or "topLinePunct"
-                          or "autoSpaceDE" or "autoSpaceDN" or "adjustRightInd" or "snapToGrid"
-                          or "mirrorIndents" or "textAlignment" or "outlineLvl" or "textboxTightWrap"
-                          // BUG-DUMP-NOTE-NUMPR: a note's first paragraph can be a
-                          // numbered/bulleted list item (direct <w:numPr>). Forward
-                          // numId+numLevel so AddFootnote/AddEndnote
-                          // (WordHandler.Add.Structure.cs) rebuild the numPr. Only
-                          // these two — NOT numFmt/listStyle/start, which would
-                          // trigger ad-hoc numbering-definition creation (BUG-DUMP26-01);
-                          // the existing /numbering raw-set already holds the def.
-                          or "numId" or "numLevel";
+                // allowNumPr:true — AddFootnote/AddEndnote rebuild a direct
+                // <w:numPr> (BUG-DUMP-NOTE-NUMPR), so numId/numLevel are forwarded
+                // here. NOT numFmt/listStyle/start (would trigger ad-hoc numbering-
+                // definition creation, BUG-DUMP26-01; the /numbering raw-set holds it).
+                bool isParaKey = IsForwardableNoteFirstParaKey(k, allowNumPr: true);
                 // Don't forward style-INHERITED numbering (the pStyle, forwarded
                 // separately, supplies it) — promoting inherited->explicit would
                 // duplicate it. numInherited is skipped by FilterEmittableProps, so
@@ -2879,8 +2826,20 @@ public static partial class WordBatchEmitter
                         Xml = rawXml
                     });
                 }
-                else if (hostIsCell)
+                else
                 {
+                    // BUG-DUMP-H86: anchor each leading SDT with insertbefore the
+                    // host's auto-seed <w:p> (/w:p[1]) — for BOTH a table cell
+                    // (AddTable seeds one <w:p> per cell) AND a header/footer root
+                    // (the part is created with a seed <w:p>, removed later by
+                    // EmitHeaderFooter's firstChildIsNonPara pass). Successive
+                    // insertbefore raw-sets stack in document order
+                    // ([SDT1, SDT2, SDT3, seed]); the original header/footer branch
+                    // used bare `prepend` to the root, which REVERSES multiple SDTs
+                    // ([SDT3, SDT2, SDT1]) — the header/footer-path gap left by the
+                    // H85 cell fix. insertbefore lands ahead of the seed exactly like
+                    // the old prepend for a single SDT, so single-SDT behavior is
+                    // unchanged.
                     items.Add(new BatchItem
                     {
                         Command = "raw-set",
@@ -2889,24 +2848,11 @@ public static partial class WordBatchEmitter
                         Action = "insertbefore",
                         Xml = rawXml
                     });
-                    // SDT now sits ahead of AddTable's auto-seed paragraph; the
-                    // caller drops that seed when the cell has no real paragraph.
-                    return true;
-                }
-                else
-                {
-                    // Non-cell host (header/footer body root): no tcPr exists, so
-                    // prepend the SDT directly into the host root, ahead of the
-                    // auto-seeded leading paragraph (the original BUG-R11A(BUG3)
-                    // placement).
-                    items.Add(new BatchItem
-                    {
-                        Command = "raw-set",
-                        Part = rawPart,
-                        Xpath = cellXPath,
-                        Action = "prepend",
-                        Xml = rawXml
-                    });
+                    // The cell caller drops the now-unconsumed seed when the cell has
+                    // no real paragraph (returns true → cellSdtLeftSeed); the
+                    // header/footer caller runs its own seed removal and ignores the
+                    // return.
+                    if (hostIsCell) return true;
                 }
                 return false;
             }
@@ -3055,6 +3001,20 @@ public static partial class WordBatchEmitter
         // match; a second means a nested control → raw-set verbatim. (<w:sdtPr> /
         // <w:sdtContent> / <w:sdtEndPr> don't match "<w:sdt" + space/'>'.)
         if (System.Text.RegularExpressions.Regex.Matches(sdtXml, "<w:sdt[ >]").Count > 1)
+            return true;
+        // BUG-DUMP-H79: an SDT whose content carries a tracked change
+        // (<w:del>/<w:ins>/<w:moveFrom>/<w:moveTo>) cannot round-trip through the
+        // flat `add sdt text=` path — that path serializes only live text, so a
+        // del-only content paragraph (no live runs) flattens to empty and the
+        // deletion is silently dropped. None of the run/rPr/pPr triggers above
+        // fire for a pure <w:del> paragraph (the <w:r> sits inside <w:del>, the
+        // pPr is empty). Treat any tracked-change wrapper as rich → raw-set
+        // verbatim. (Same meta-pattern as the complex-field-result del fix: a
+        // tracked-change wrapper must force the verbatim path.)
+        if (sdtXml.Contains("<w:del", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:ins", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:moveFrom", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:moveTo", StringComparison.Ordinal))
             return true;
         return sdtXml.Contains("<w:hyperlink", StringComparison.Ordinal)
             || sdtXml.Contains("<w:fldChar", StringComparison.Ordinal)

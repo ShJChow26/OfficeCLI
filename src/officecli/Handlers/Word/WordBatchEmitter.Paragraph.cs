@@ -2220,11 +2220,25 @@ public static partial class WordBatchEmitter
             var sb = new System.Text.StringBuilder();
             bool ok = true;
             var rfSlice = spStr.Split('\n').Where(p => !string.IsNullOrEmpty(p)).ToList();
-            foreach (var p in rfSlice)
+            // BUG-DUMP-H78: a tracked deletion inside the result is a <w:del> sibling
+            // BETWEEN field runs; per-path extraction resolves each path to its inner
+            // <w:r> and strips the <w:del> wrapper. The emitter sets
+            // _fieldSliceForceRange so we take the contiguous sibling-range extraction
+            // (begin..end) directly, capturing the <w:del>/<w:delText> in place.
+            bool forceRange = run.Format.TryGetValue("_fieldSliceForceRange", out var frv)
+                && frv is bool frvB && frvB;
+            if (forceRange && rfSlice.Count > 0)
             {
-                var xml = word.GetElementXml(p);
-                if (string.IsNullOrEmpty(xml)) { ok = false; break; }
-                sb.Append(xml);
+                ok = false; // skip per-path; fall to the range resolve below
+            }
+            else
+            {
+                foreach (var p in rfSlice)
+                {
+                    var xml = word.GetElementXml(p);
+                    if (string.IsNullOrEmpty(xml)) { ok = false; break; }
+                    sb.Append(xml);
+                }
             }
             // BUG-DUMP-R56-NESTEDFORMFIELD: same bookmark-in-slice fragility as
             // the nested-field branch — fall back to a contiguous sibling-range
@@ -2924,6 +2938,19 @@ public static partial class WordBatchEmitter
                     ctx?.Warnings.Add(new DocxUnsupportedWarning(
                         "picture", run.Path,
                         "SVG vector layer (svgBlip) dropped on round-trip; PNG raster fallback preserved"));
+                // BUG-DUMP-H82: StripRelReferencingBlipExts drops ANY <a:ext> that
+                // references a relationship, not only the SVG companion — most
+                // notably the Office 2010 artistic-effect extension
+                // (<a14:imgProps><a14:imgLayer r:embed=…><a14:imgEffect>…) whose
+                // r:embed points at a `.wdp` (HD Photo) backing layer. That drop was
+                // silent (the svgBlip warning above didn't match), losing the
+                // editable effect + its .wdp source with no signal. Warn for any
+                // rel-referencing ext drop that ISN'T the already-warned svgBlip,
+                // mirroring the drop-but-warn model for lossy media extensions.
+                else if (BlipHasRelReferencingExt(picXml))
+                    ctx?.Warnings.Add(new DocxUnsupportedWarning(
+                        "picture", run.Path,
+                        "image effect layer (e.g. Office artistic effect / HD-photo .wdp backing layer) dropped on round-trip; raster image preserved"));
                 var spEffectLst = CapturePicSpPrEffectLst(picXml);
                 if (!string.IsNullOrEmpty(spEffectLst))
                     picProps["spEffects"] = spEffectLst!;
@@ -3273,6 +3300,27 @@ public static partial class WordBatchEmitter
     // aborts and the image is lost. Drop any <a:ext> block that references a
     // relationship (r:embed / r:link / r:id); the raster fallback still renders.
     // Exts with no relationship reference (e.g. a14:useLocalDpi) are kept.
+    // BUG-DUMP-H82: true when the picture's first <a:blip> carries an <a:ext>
+    // that references a relationship (r:embed/r:link/r:id) — i.e. an extension
+    // that StripRelReferencingBlipExts will drop. Used to warn on the non-svgBlip
+    // drops (Office 2010 artistic effects + their .wdp backing layer) that were
+    // previously stripped silently. Scoped to the <a:blip> inner so the main
+    // r:embed attribute on <a:blip> (carried through by AddPicture) is not counted.
+    private static bool BlipHasRelReferencingExt(string picXml)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(
+            picXml, @"<a:blip\b[^>]*?>(.*?)</a:blip>",
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+        if (!m.Success) return false;
+        foreach (System.Text.RegularExpressions.Match ext in
+                 System.Text.RegularExpressions.Regex.Matches(
+                     m.Groups[1].Value, @"<a:ext\b[^>]*>.*?</a:ext>",
+                     System.Text.RegularExpressions.RegexOptions.Singleline))
+            if (System.Text.RegularExpressions.Regex.IsMatch(ext.Value, @"\br:(embed|link|id)\s*="))
+                return true;
+        return false;
+    }
+
     private static string StripRelReferencingBlipExts(string blipInner)
     {
         if (string.IsNullOrEmpty(blipInner)
@@ -4553,6 +4601,17 @@ public static partial class WordBatchEmitter
             // exclude sdtPr/endPr-only rPr false positives: those live in
             // <w:sdtPr>/<w:sdtEndPr><w:rPr>; a content rPr sits under <w:r>.
             && System.Text.RegularExpressions.Regex.IsMatch(sdtXml, "<w:r[ >].*?<w:rPr"))
+            return true;
+        // BUG-DUMP-H80-1: a run-level SDT whose content carries a tracked change
+        // (<w:del>/<w:ins>/<w:moveFrom>/<w:moveTo>) cannot round-trip through the
+        // flat `add sdt text=` path — a del-only content paragraph (no live run)
+        // flattens to an empty run and the deletion is silently dropped. This is
+        // the inline-path counterpart of the block-SDT fix (IsRichBlockSdt in
+        // WordBatchEmitter.Resources.cs); the block fix did not cover this path.
+        if (sdtXml.Contains("<w:del", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:ins", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:moveFrom", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:moveTo", StringComparison.Ordinal))
             return true;
         return sdtXml.Contains("<w:hyperlink", StringComparison.Ordinal)
             || sdtXml.Contains("<w:fldChar", StringComparison.Ordinal)

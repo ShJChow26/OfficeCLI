@@ -72,6 +72,10 @@ public static partial class WordBatchEmitter
         // by TryEmitFieldRun (routes the field to a verbatim raw-set chain);
         // never replayed as an Add/Set property.
         "_richFieldResult", "_fieldSlicePaths",
+        // BUG-DUMP-H78: internal flag forcing the field-slice raw-set to use the
+        // contiguous sibling-range extractor (captures a <w:del> wrapper inside a
+        // live field result). Consumed by TryEmitFieldRun; never replayed.
+        "_fieldSliceForceRange",
         // BUG-DUMP-R26-7: flag set when a field cached result wraps a hyperlink
         // (external rel) the typed path can't preserve — drives a deterministic
         // warning in TryEmitFieldRun. Never replayed as an Add/Set property.
@@ -88,6 +92,43 @@ public static partial class WordBatchEmitter
         // through dump for AtLeast spacing to round-trip without silent
         // downgrade to Exact (which clips tall glyphs).
     };
+
+    // Shared allowlist for forwarding a note/comment FIRST paragraph's direct
+    // paragraph-level formatting onto its `add footnote|endnote|comment` op.
+    // Both EmitNoteReference (footnote/endnote) and the comment emit used to
+    // carry byte-identical copies of this switch; they diverged only on numPr:
+    // notes rebuild a list item via AddFootnote/AddEndnote, so they forward
+    // numId/numLevel (allowNumPr=true), while AddComment has no numPr rebuild
+    // path, so comments keep them out (allowNumPr=false). Callers still own the
+    // numInherited guard and the !props.ContainsKey dedupe.
+    // BUG-DUMP-NOTE-PBDR / -PPR-SWEEP / -NUMPR consolidated here.
+    private static bool IsForwardableNoteFirstParaKey(string k, bool allowNumPr)
+    {
+        if (k.StartsWith("markRPr.", StringComparison.OrdinalIgnoreCase)
+            || k.StartsWith("pbdr.", StringComparison.OrdinalIgnoreCase))
+            return true;
+        switch (k)
+        {
+            case "shading": case "shd":
+            case "lineSpacing": case "lineRule": case "spaceBefore": case "spaceAfter":
+            case "spaceBeforeLines": case "spaceAfterLines": case "alignment": case "align":
+            case "direction": case "leftIndent": case "rightIndent": case "firstLine":
+            case "indent": case "firstLineIndent": case "hangingIndent":
+            case "hanging": case "contextualSpacing": case "spaceBeforeAuto": case "spaceAfterAuto":
+            case "keepNext": case "keepLines": case "pageBreakBefore": case "widowControl":
+            case "suppressLineNumbers": case "suppressAutoHyphens": case "suppressOverlap":
+            case "kinsoku": case "wordWrap": case "overflowPunct": case "topLinePunct":
+            case "autoSpaceDE": case "autoSpaceDN": case "adjustRightInd": case "snapToGrid":
+            case "mirrorIndents": case "textAlignment": case "outlineLvl": case "textboxTightWrap":
+                return true;
+            // notes-only: AddFootnote/AddEndnote rebuild a direct <w:numPr>; a
+            // comment's apply path has no equivalent, so it stays opt-in.
+            case "numId": case "numLevel":
+                return allowNumPr;
+            default:
+                return false;
+        }
+    }
 
     private static Dictionary<string, string> FilterEmittableProps(Dictionary<string, object?> raw)
     {
