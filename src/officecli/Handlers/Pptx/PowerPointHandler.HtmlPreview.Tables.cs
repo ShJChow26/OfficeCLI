@@ -68,7 +68,25 @@ public partial class PowerPointHandler
         int totalRows = table.Elements<Drawing.TableRow>().Count();
         int totalCols = gridCols?.Count ?? 0;
 
-        sb.AppendLine($"    <div class=\"table-container\"{dataPathAttr} style=\"left:{Units.EmuToPt(x)}pt;top:{Units.EmuToPt(y)}pt;width:{Units.EmuToPt(tableWidthEmu)}pt;height:{Units.EmuToPt(cy)}pt\">");
+        // Whole-table background fill (<a:tblPr><a:solidFill|gradFill>). PowerPoint
+        // renders this as the table-container background — visible through cell margins
+        // and any noFill cells (Format Table -> Fill). The renderer previously read
+        // tblPr only for the style id + banding flags and dropped this fill entirely.
+        var tblBgCss = "";
+        var tblSolid = tblPr?.GetFirstChild<Drawing.SolidFill>();
+        var tblGrad = tblPr?.GetFirstChild<Drawing.GradientFill>();
+        if (tblSolid != null)
+        {
+            var bg = ResolveFillColor(tblSolid, themeColors);
+            if (bg != null) tblBgCss = $";background:{bg}";
+        }
+        else if (tblGrad != null)
+        {
+            var gradCss = GradientToCss(tblGrad, themeColors);
+            if (!string.IsNullOrEmpty(gradCss)) tblBgCss = $";background:{gradCss}";
+        }
+
+        sb.AppendLine($"    <div class=\"table-container\"{dataPathAttr} style=\"left:{Units.EmuToPt(x)}pt;top:{Units.EmuToPt(y)}pt;width:{Units.EmuToPt(tableWidthEmu)}pt;height:{Units.EmuToPt(cy)}pt{tblBgCss}\">");
         sb.AppendLine("      <table class=\"slide-table\">");
 
         // Column widths — emit absolute pt per <a:gridCol w>, not percentages.
