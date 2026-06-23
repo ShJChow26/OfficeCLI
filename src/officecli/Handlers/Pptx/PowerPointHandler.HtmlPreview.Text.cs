@@ -365,18 +365,23 @@ public partial class PowerPointHandler
                     : "arabicPeriod";
                 autoNumGlyph = FormatAutoNumberGlyph(schemeToken, index);
             }
-            else
+            else if (bulletAuto == null)
             {
-                // A non-auto-numbered paragraph interrupts the list — PowerPoint
-                // RESTARTS the numbering at startAt for the next numbered paragraph
-                // (verified: 1.,2.,<plain>,1.). Clearing the counters (not just
-                // nulling lastAutoKey) makes the next numbered para re-initialize from
-                // startAt instead of continuing (...,3.). A pure level return between
-                // consecutive numbered paras never enters this branch, so the
+                // A genuinely non-auto-numbered paragraph interrupts the list —
+                // PowerPoint RESTARTS the numbering at startAt for the next numbered
+                // paragraph (verified: 1.,2.,<plain>,1.). Clearing the counters (not
+                // just nulling lastAutoKey) makes the next numbered para re-initialize
+                // from startAt instead of continuing (...,3.). A pure level return
+                // between consecutive numbered paras never enters this branch, so the
                 // continue-parent-count behavior is unaffected.
                 if (autoNumCounters.Count > 0) autoNumCounters.Clear();
                 lastAutoKey = null;
             }
+            // else (bulletAuto != null && isEmptyPara): an EMPTY auto-numbered
+            // paragraph. PowerPoint skips it in numbering — it neither consumes a
+            // number nor resets the counters, so following real items continue
+            // (1.,<empty>,2.). Leave the counter state untouched (no clear, no
+            // advance).
 
             sb.Append($"<div class=\"para\" style=\"{string.Join(";", paraStyles)}\">");
 
