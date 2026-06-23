@@ -3043,6 +3043,16 @@ public static partial class WordBatchEmitter
             || sdtXml.Contains("<w:br", StringComparison.Ordinal)
             || sdtXml.Contains("<w:tab", StringComparison.Ordinal)
             || sdtXml.Contains("<w:cr", StringComparison.Ordinal)
+            // BUG-DUMP-H95: other text-less run-content elements the typed
+            // `add sdt text=` path drops because they produce no <w:t> — a symbol
+            // (<w:sym>), a positional tab (<w:ptab> — distinct from <w:tab>, so the
+            // <w:tab> trigger above does NOT cover it), and the hyphen markers
+            // (<w:noBreakHyphen> turns "co-op" into "coop" when lost; <w:softHyphen>
+            // for completeness). Same text-less-content reason as <w:br>/<w:tab>/<w:cr>.
+            || sdtXml.Contains("<w:sym", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:ptab", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:noBreakHyphen", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:softHyphen", StringComparison.Ordinal)
             // BUG-DUMP-EQUATION-SDT: an equation content control's math content
             // (<m:oMath>/<m:oMathPara>) lives in m: runs, not <w:r>, so the run
             // checks above miss it and the typed path dropped the equation. Treat

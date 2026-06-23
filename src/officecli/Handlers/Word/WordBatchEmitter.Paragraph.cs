@@ -4630,6 +4630,12 @@ public static partial class WordBatchEmitter
             || sdtXml.Contains("<w:br", StringComparison.Ordinal)
             || sdtXml.Contains("<w:tab", StringComparison.Ordinal)
             || sdtXml.Contains("<w:cr", StringComparison.Ordinal)
+            // BUG-DUMP-H95: text-less run-content the typed path drops (produce no
+            // <w:t>) — symbol, positional tab (<w:ptab> ≠ <w:tab>), hyphen markers.
+            || sdtXml.Contains("<w:sym", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:ptab", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:noBreakHyphen", StringComparison.Ordinal)
+            || sdtXml.Contains("<w:softHyphen", StringComparison.Ordinal)
             // BUG-DUMP-EQUATION-SDT: an EQUATION content control (<w:sdtPr><w:equation/>
             // … <w:sdtContent><m:oMathPara>/<m:oMath>) carries its math in m: runs
             // (<m:r>/<m:t>), not <w:r>/<w:t>, so none of the run checks above fire and
