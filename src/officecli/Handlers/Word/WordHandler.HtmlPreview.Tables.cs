@@ -54,6 +54,15 @@ public partial class WordHandler
         // Resolve conditional formatting from table style
         var condFormats = styleId != null ? ResolveTableStyleConditionalFormats(styleId) : null;
 
+        // Resolve the table-style base cell shading (<w:style><w:tcPr><w:shd>) —
+        // the whole-table cell fill. Used as the lowest-priority cell background
+        // fallback so a dark-list table's blue fill shows behind its white run
+        // color (which is applied on the <table>). Conditional-format shd and
+        // direct cell shd both override it.
+        var tableStyleCellFill = styleId != null
+            ? ResolveShadingFill(ResolveTableStyleCellShading(styleId))
+            : null;
+
         // Check for floating table (tblpPr = text wrapping)
         var tblpPr = tblPr?.GetFirstChild<TablePositionProperties>();
         var tableStyles = new List<string>();
@@ -391,7 +400,7 @@ public partial class WordHandler
                 var tag = isHeader ? "th" : "td";
                 var condTypes = GetConditionalTypes(tblLook, rowIdx, colIdx, totalRows, totalCols);
                 var cellStyle = GetTableCellInlineCss(cell, tableBordersNone, tblBorders, condFormats, condTypes,
-                    rowIdx, colIdx, totalRows, totalCols, exactRowHeightPt, tblCellMar);
+                    rowIdx, colIdx, totalRows, totalCols, exactRowHeightPt, tblCellMar, tableStyleCellFill);
 
                 // Check if conditional format overrides font-size (needs class for CSS override)
                 bool hasTsf = cellStyle.Contains("__TSF__");
@@ -620,6 +629,29 @@ public partial class WordHandler
             if (style == null) break;
             var cm = style.StyleTableProperties?.TableCellMarginDefault;
             if (cm != null) return cm;
+            currentId = style.BasedOn?.Val?.Value;
+        }
+        return null;
+    }
+
+    /// <summary>Resolve the base cell shading (&lt;w:style&gt;&lt;w:tcPr&gt;&lt;w:shd&gt;)
+    /// from a table style (walking the basedOn chain). Mirrors
+    /// ResolveTableStyleBorders — the first style in the chain that declares a
+    /// base tcPr/shd wins. This is the table-style whole-table cell fill (e.g. a
+    /// dark-list table whose base tcPr paints every cell blue and base rPr writes
+    /// white text); without it the white run color lands on the default white cell
+    /// and the labels render as an invisible empty frame. Conditional-format
+    /// (tblStylePr firstRow/band…) shd and direct cell shd both override this.</summary>
+    private Shading? ResolveTableStyleCellShading(string styleId)
+    {
+        var visited = new HashSet<string>();
+        var currentId = styleId;
+        while (currentId != null && visited.Add(currentId))
+        {
+            var style = FindStyleById(currentId);
+            if (style == null) break;
+            var shd = style.StyleTableCellProperties?.GetFirstChild<Shading>();
+            if (shd != null) return shd;
             currentId = style.BasedOn?.Val?.Value;
         }
         return null;

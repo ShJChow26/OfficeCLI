@@ -2118,10 +2118,20 @@ public partial class WordHandler
     private string GetTableCellInlineCss(TableCell cell, bool tableBordersNone, TableBorders? tblBorders = null,
         Dictionary<string, TableConditionalFormat>? condFormats = null, List<string>? condTypes = null,
         int rowIdx = 0, int colIdx = 0, int totalRows = 1, int totalCols = 1,
-        double? exactRowHeightPt = null, TableCellMarginDefault? tblCellMar = null)
+        double? exactRowHeightPt = null, TableCellMarginDefault? tblCellMar = null,
+        string? tableStyleCellFill = null)
     {
         var parts = new List<string>();
         var tcPr = cell.TableCellProperties;
+
+        // Table-style base cell shading (<w:style><w:tcPr><w:shd>) — the
+        // whole-table cell fill, lowest priority. Seeded first so a conditional
+        // format (tblStylePr) shd or a direct cell shd (both below) can override
+        // it via the RemoveAll(background-color:) path. Without this a dark-list
+        // table's blue fill never appears and its white run color (applied on the
+        // <table>) renders the cell labels as an invisible empty frame.
+        if (tableStyleCellFill != null)
+            parts.Add($"background-color:{tableStyleCellFill}");
 
         // Apply table-level borders: outer borders only on table edges, insideH/V on inner edges
         if (!tableBordersNone && tblBorders != null)
