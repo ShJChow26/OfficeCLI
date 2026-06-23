@@ -1181,9 +1181,18 @@ public partial class WordHandler
             // on the dark fill. lt1→white / dk1→black / accentN resolve through
             // the theme via ResolveSchemeColor.
             var fontRefColor = ResolveShapeFontRefColor(shape);
+            // overflow-wrap:normal + word-break:normal on the text-box content
+            // wrapper to defeat the inherited .page-body{overflow-wrap:break-word}.
+            // A fixed-width text box (e.g. a 161px "DRAFT" stamp with leading
+            // nbsp for centering) would otherwise let break-word split a single
+            // Latin word mid-token ("DRA"/"FT") when nbsp+word exceeds the inner
+            // width. Word autofits / keeps the word whole, overflowing slightly.
+            // Text-box only — body/table cells keep break-word/anywhere so long
+            // content still wraps inside fixed columns.
+            const string txbxWrap = "overflow-wrap:normal;word-break:normal";
             var txbxWrapStyle = fontRefColor != null
-                ? $"width:100%;color:{fontRefColor}"
-                : "width:100%";
+                ? $"width:100%;color:{fontRefColor};{txbxWrap}"
+                : $"width:100%;{txbxWrap}";
             sb.Append($"<div style=\"{txbxWrapStyle}\">");
 
             // Inject pending float images into this text box
