@@ -843,18 +843,39 @@ public partial class WordHandler
         return false;
     }
 
+    // Horizontal anchor origins that span the full text column (margin/page) and
+    // therefore carry an <wp:align> (left/center/right) we can map to a CSS
+    // alignment inside the position:relative paragraph box — as opposed to a
+    // posOffset coordinate. The paragraph host box's content width equals the
+    // text column, so align=center → centered, left/right → edge-pinned.
+    private static bool IsColumnSpanRelative(DW.HorizontalRelativePositionValues? from)
+        => from == DW.HorizontalRelativePositionValues.Margin
+        || from == DW.HorizontalRelativePositionValues.Page
+        || from == DW.HorizontalRelativePositionValues.Column;
+
     /// <summary>
-    /// For a wrapNone shape anchored relative to the column/paragraph (H from
-    /// column/character/left-margin/inside-margin, V from paragraph/line) with
-    /// explicit H and V posOffsets, compute absolute positioning CSS measured
-    /// from the host paragraph's top-left. Returns null for any other anchor
-    /// shape — page/page (handled against .page in ComputeAnchorWrapFloatCss),
-    /// aligned (align= rather than posOffset), wrapped, or inline — so those
-    /// paths keep their existing behaviour.
+    /// For a wrapNone shape anchored relative to the column/paragraph, compute
+    /// absolute positioning CSS measured from the host paragraph's top-left.
+    ///
+    /// Horizontal placement comes from EITHER an explicit posOffset (H relative
+    /// to column/character/left-margin/inside-margin — the distance from the
+    /// paragraph's own left edge) OR an &lt;wp:align&gt; (H relative to
+    /// margin/page/column, which spans the text column so the paragraph box's
+    /// content width matches): center → left:50%;translateX(-50%); left → 0;
+    /// right → pinned to the right edge.
+    ///
+    /// Vertical placement comes from a posOffset relative to the paragraph/line
+    /// (distance below the paragraph's own top edge).
+    ///
+    /// Returns null for any other anchor shape — page/page (handled against
+    /// .page in ComputeAnchorWrapFloatCss), wrapped, or inline — so those paths
+    /// keep their existing behaviour.
     ///
     /// This recovers per-shape placement for forms whose checkbox/marker
-    /// rectangles float over a label list via column/paragraph posOffsets; in
-    /// flow HTML they otherwise collapse to a left-edge ladder.
+    /// rectangles float over a label list via column/paragraph posOffsets (in
+    /// flow HTML they otherwise collapse to a left-edge ladder), and for
+    /// margin-centered floating text boxes positioned a fixed distance below
+    /// their anchoring paragraph.
     /// </summary>
     private static string? ComputeParagraphAnchorAbsoluteCss(Drawing drawing)
     {
@@ -869,23 +890,43 @@ public partial class WordHandler
         var vPos = anchor.GetFirstChild<DW.VerticalPosition>();
         if (hPos == null || vPos == null) return null;
 
-        if (!IsColumnLeftRelative(hPos.RelativeFrom?.Value)) return null;
+        // Vertical: distance below the paragraph's own top edge (posOffset).
         if (!IsParagraphTopRelative(vPos.RelativeFrom?.Value)) return null;
-
-        // Require explicit posOffsets — an align= (left/center/right or
-        // top/bottom/center) is not a sub-paragraph coordinate we can resolve.
-        var hOff = hPos.Descendants().FirstOrDefault(e => e.LocalName == "posOffset");
         var vOff = vPos.Descendants().FirstOrDefault(e => e.LocalName == "posOffset");
-        if (hOff == null || vOff == null) return null;
-        if (!long.TryParse(hOff.InnerText, out var hEmu)) return null;
-        if (!long.TryParse(vOff.InnerText, out var vEmu)) return null;
-
-        var leftPt = hEmu / EmuConverter.EmuPerPointF;
+        if (vOff == null || !long.TryParse(vOff.InnerText, out var vEmu)) return null;
         var topPt = vEmu / EmuConverter.EmuPerPointF;
+
+        // Horizontal: posOffset from the column/paragraph left edge, OR an
+        // <wp:align> against a column-spanning origin (margin/page/column).
+        string horizCss;
+        var hFrom = hPos.RelativeFrom?.Value;
+        var hOff = hPos.Descendants().FirstOrDefault(e => e.LocalName == "posOffset");
+        if (IsColumnLeftRelative(hFrom) && hOff != null
+            && long.TryParse(hOff.InnerText, out var hEmu))
+        {
+            var leftPt = hEmu / EmuConverter.EmuPerPointF;
+            horizCss = $"left:{leftPt:0.#}pt";
+        }
+        else if (IsColumnSpanRelative(hFrom))
+        {
+            var hAlign = hPos.Descendants().FirstOrDefault(e => e.LocalName == "align")?.InnerText;
+            horizCss = hAlign switch
+            {
+                "center" => "left:50%;transform:translateX(-50%)",
+                "left" => "left:0",
+                "right" => "right:0",
+                _ => "",  // inside/outside or no align → not resolvable here
+            };
+            if (horizCss.Length == 0) return null;
+        }
+        else
+        {
+            return null;
+        }
 
         // behindDoc="1" → under the text (e.g. shaded marker); else over it.
         var z = anchor.BehindDoc?.Value == true ? "-1" : "5";
-        return $"position:absolute;left:{leftPt:0.#}pt;top:{topPt:0.#}pt;z-index:{z}";
+        return $"position:absolute;{horizCss};top:{topPt:0.#}pt;z-index:{z}";
     }
 
     /// <summary>
