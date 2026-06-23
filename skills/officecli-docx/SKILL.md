@@ -520,7 +520,6 @@ Before calling a color/field/chart broken, open the file in the user's target vi
 | `raw-set` when dotted-attr would work | Prefer L2 dotted-attr over L3 raw-set |
 | Next paragraph inherits the previous Heading style | Set explicit `--prop style=Normal` on the following paragraph |
 | Modifying a file open in Word | Close it in Word first |
-| Resident command "could not be delivered" (rare — main pipe busy) | Retry (the connect retries automatically; a surfaced error means re-issue is safe), or close/reopen |
 | Echo into batch breaks on `$`/`'` | Heredoc with single-quoted delimiter: `cat <<'EOF' \| officecli batch …` |
 
 ## Raw-set XML appendix (L3 patterns)
