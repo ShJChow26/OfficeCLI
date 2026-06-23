@@ -1925,6 +1925,34 @@ public partial class PowerPointHandler
             if (!string.IsNullOrEmpty(dashArray))
                 dashAttr = $" stroke-dasharray=\"{dashArray}\"";
         }
+        else
+        {
+            // CONSISTENCY(dash-presets): <a:custDash> (mutually exclusive with prstDash)
+            // is a list of <a:ds d sp/> stops (ST_PositivePercentage of line width).
+            // Mirror ParseOutline's encoding into "custom:<onMult>,<offMult>,..." and
+            // run it through the same DashTypeToSvgDasharray converter. Without this,
+            // a connector with a custom dash rendered SOLID.
+            var custDash = outline?.GetFirstChild<Drawing.CustomDash>();
+            if (custDash != null)
+            {
+                var ci = System.Globalization.CultureInfo.InvariantCulture;
+                var segs = new List<string>();
+                foreach (var ds in custDash.Elements<Drawing.DashStop>())
+                {
+                    double d = (ds.DashLength?.Value ?? 0) / 100000.0;
+                    double sp = (ds.SpaceLength?.Value ?? 0) / 100000.0;
+                    if (d <= 0 && sp <= 0) continue;
+                    segs.Add(d.ToString("0.##", ci));
+                    segs.Add(sp.ToString("0.##", ci));
+                }
+                if (segs.Count > 0)
+                {
+                    var dashArray = DashTypeToSvgDasharray("custom:" + string.Join(",", segs), lineWidth);
+                    if (!string.IsNullOrEmpty(dashArray))
+                        dashAttr = $" stroke-dasharray=\"{dashArray}\"";
+                }
+            }
+        }
 
         // Arrow markers
         var headEnd = outline?.GetFirstChild<Drawing.HeadEnd>();
