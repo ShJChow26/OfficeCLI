@@ -1154,6 +1154,12 @@ public partial class WordHandler
                      // list, so it was dropped and the line re-snapped → reflow.
                      // ApplyRunFormatting gained a snapToGrid case (BUG-15).
                      "snapToGrid",
+                     // BUG-DUMP-RPR-CONTAINER: a hyperlink run can be RTL
+                     // (Arabic/Hebrew link text) and/or carry a CJK emphasis mark
+                     // (<w:em>); both were absent from this list and dropped on
+                     // round-trip. ApplyRunFormatting handles direction/rtl, and now
+                     // em (added alongside this fix).
+                     "direction", "rtl", "em", "emphasisMark",
                  })
         {
             if (properties.TryGetValue(hlPassKey, out var hlPassVal))
