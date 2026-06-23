@@ -25,7 +25,11 @@ static partial class CommandBuilder
         var outOpt = new Option<string?>("--out", "-o") { Description = "Output file path (screenshot mode; defaults to a temp file)" };
         var screenshotWidthOpt = new Option<int>("--screenshot-width") { Description = "Screenshot viewport width (default 1600)", DefaultValueFactory = _ => 1600 };
         var screenshotHeightOpt = new Option<int>("--screenshot-height") { Description = "Screenshot viewport height (default 1200)", DefaultValueFactory = _ => 1200 };
-        var gridOpt = new Option<string?>("--grid") { Description = "Tile pages/slides into a thumbnail contact sheet (screenshot mode, pptx + docx). Pass a column count (e.g. 3), or 'auto' to pick a column count that keeps the sheet roughly square. Omit = off." };
+        var gridOpt = new Option<string?>("--grid")
+        {
+            Description = "Tile pages/slides into a thumbnail contact sheet (screenshot mode, pptx + docx). Bare --grid (or --grid auto) picks a column count that keeps the sheet roughly square; pass a number (e.g. --grid 3) to force columns. Omit = off.",
+            Arity = ArgumentArity.ZeroOrOne, // allow bare --grid (no value) → auto
+        };
         var renderOpt = new Option<string>("--render") { Description = "Screenshot rendering path (docx/pptx): auto (default; native on Windows w/ Word/PowerPoint, html elsewhere), native (force OS-native, error if unavailable), html", DefaultValueFactory = _ => "auto" };
         var withPagesOpt = new Option<bool>("--page-count") { Description = "stats mode (docx only): also report total page count via Word repagination (Win + Word required; slow on long docs)" };
 
@@ -63,7 +67,12 @@ static partial class CommandBuilder
             var outArg = result.GetValue(outOpt);
             var screenshotWidth = result.GetValue(screenshotWidthOpt);
             var screenshotHeight = result.GetValue(screenshotHeightOpt);
-            var gridCols = ParseGridSpec(result.GetValue(gridOpt)); // 0 = off, -1 = auto, N = explicit
+            // --grid has three states: absent → off (0), present with no value
+            // (bare --grid) → auto (-1), present with a value → parse it.
+            var gridResult = result.GetResult(gridOpt);
+            var gridCols = gridResult is null ? 0
+                : gridResult.Tokens.Count == 0 ? -1
+                : ParseGridSpec(gridResult.Tokens[0].Value);
             var renderMode = (result.GetValue(renderOpt) ?? "auto").ToLowerInvariant();
             if (renderMode is not ("auto" or "native" or "html"))
                 throw new OfficeCli.Core.CliException($"Invalid --render value: {renderMode}. Valid: auto, native, html") { Code = "invalid_render", ValidValues = ["auto", "native", "html"] };
