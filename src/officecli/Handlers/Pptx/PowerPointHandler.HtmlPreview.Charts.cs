@@ -136,7 +136,7 @@ public partial class PowerPointHandler
         if (!string.IsNullOrEmpty(info.Title))
         {
             var titleColor = info.TitleFontColor != null ? ChartSvgRenderer.CssHexColor(info.TitleFontColor) : chartTextColor;
-            sb.AppendLine($"      <div style=\"text-align:center;font-size:{info.TitleFontSize};font-weight:bold;padding:4px;flex-shrink:0;color:{titleColor}\">{ChartSvgRenderer.HtmlEncode(info.Title)}</div>");
+            sb.AppendLine($"      <div style=\"text-align:center;font-size:{info.TitleFontSize};font-weight:{(info.TitleBold ? "bold" : "normal")};padding:4px;flex-shrink:0;color:{titleColor}\">{ChartSvgRenderer.HtmlEncode(info.Title)}</div>");
         }
 
         // Legend position drives the plot+legend layout, mirroring the Word/Excel

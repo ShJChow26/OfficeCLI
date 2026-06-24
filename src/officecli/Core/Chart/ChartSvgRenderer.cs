@@ -2792,6 +2792,7 @@ internal partial class ChartSvgRenderer
         public List<Dictionary<int, string>> PerPointColors { get; set; } = [];
         public string? Title { get; set; }
         public string TitleFontSize { get; set; } = "10pt";
+        public bool TitleBold { get; set; } = true;   // chart titles default to bold
         public bool ShowDataLabels { get; set; }
         public bool ShowDataLabelVal { get; set; }
         public bool ShowDataLabelPercent { get; set; }
@@ -3119,6 +3120,12 @@ internal partial class ChartSvgRenderer
             if (titleRPr?.FontSize?.HasValue == true)
                 info.TitleFontSize = $"{titleRPr.FontSize.Value / 100.0:0.##}pt";
             info.TitleFontColor = ExtractFontColor(titleRPr, themeColors);
+            // Chart title bold: default true, but honor an explicit b="0" (run rPr or the
+            // paragraph defRPr). The renderer previously hardcoded font-weight:bold, so a
+            // title set to non-bold still rendered bold. Mirrors the axis-title bold path.
+            var titleDefRPr = titleEl.Descendants<Drawing.DefaultRunProperties>().FirstOrDefault();
+            if (titleRPr?.Bold?.HasValue == true) info.TitleBold = titleRPr.Bold.Value;
+            else if (titleDefRPr?.Bold?.HasValue == true) info.TitleBold = titleDefRPr.Bold.Value;
         }
 
         // Data labels
