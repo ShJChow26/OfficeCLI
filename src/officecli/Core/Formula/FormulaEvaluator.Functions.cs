@@ -181,7 +181,15 @@ internal partial class FormulaEvaluator
             "NPV" => EvalNpv(args), "IPMT" => EvalIpmt(args), "PPMT" => EvalPpmt(args),
             "SLN" => args.Count >= 3 ? FR((num(0) - num(1)) / num(2)) : null,
             "SYD" => EvalSyd(args), "DB" => EvalDb(args), "DDB" => EvalDdb(args),
-            "RATE" or "IRR" => null, // iterative solvers — unsupported
+            "RATE" => EvalRate(args), "IRR" => EvalIrr(args), // via shared root solver
+
+            // ===== Database (Dxxx) — aggregate a table column over criteria =====
+            "DSUM" => EvalDatabase(args, DbAgg.Sum), "DCOUNT" => EvalDatabase(args, DbAgg.Count),
+            "DCOUNTA" => EvalDatabase(args, DbAgg.CountA), "DAVERAGE" => EvalDatabase(args, DbAgg.Average),
+            "DMAX" => EvalDatabase(args, DbAgg.Max), "DMIN" => EvalDatabase(args, DbAgg.Min),
+            "DPRODUCT" => EvalDatabase(args, DbAgg.Product), "DGET" => EvalDatabase(args, DbAgg.Get),
+            "DSTDEV" => EvalDatabase(args, DbAgg.StdevS), "DSTDEVP" => EvalDatabase(args, DbAgg.StdevP),
+            "DVAR" => EvalDatabase(args, DbAgg.VarS), "DVARP" => EvalDatabase(args, DbAgg.VarP),
 
             // ===== Conversion =====
             "BIN2DEC" => FR(Convert.ToInt64(str(0), 2)),
@@ -994,5 +1002,136 @@ internal partial class FormulaEvaluator
         double bv = cost;
         for (int p = 1; p <= period; p++) { var dep = Math.Min(bv * factor / life, Math.Max(bv - salvage, 0)); bv -= dep; if (p == period) return FR(dep); }
         return FR(0);
+    }
+
+    // RATE(nper, pmt, pv, [fv], [type], [guess]) — periodic interest rate that
+    // balances the time-value-of-money annuity equation. Solved via SolveRoot.
+    private static FormulaResult? EvalRate(List<object> args)
+    {
+        if (args.Count < 3) return null;
+        double Num(int i, double def) => i < args.Count && args[i] is FormulaResult r ? r.AsNumber() : def;
+        double nper = Num(0, 0), pmt = Num(1, 0), pv = Num(2, 0), fv = Num(3, 0), type = Num(4, 0), guess = Num(5, 0.1);
+
+        // f(r) = pv·(1+r)^n + pmt·(1+r·type)·((1+r)^n − 1)/r + fv. The /r term
+        // has a removable singularity at r=0 whose limit is pmt·(1+r·type)·n;
+        // use it near zero so the solver can pass cleanly through r=0.
+        double F(double r)
+        {
+            double pow = Math.Pow(1 + r, nper);
+            double annuity = Math.Abs(r) < 1e-12 ? nper : (pow - 1) / r;
+            return pv * pow + pmt * (1 + r * type) * annuity + fv;
+        }
+        var root = SolveRoot(F, guess);
+        return root.HasValue ? FR(root.Value) : FormulaResult.Error("#NUM!");
+    }
+
+    // IRR(values, [guess]) — rate making the NPV of the cashflow series zero.
+    private static FormulaResult? EvalIrr(List<object> args)
+    {
+        if (args.Count < 1) return null;
+        var cf = AsDoubles(args[0]);
+        if (cf == null || cf.Length < 2) return FormulaResult.Error("#NUM!");
+        double guess = args.Count > 1 && args[1] is FormulaResult g ? g.AsNumber() : 0.1;
+
+        double F(double r)
+        {
+            double npv = 0;
+            for (int i = 0; i < cf.Length; i++) npv += cf[i] / Math.Pow(1 + r, i);
+            return npv;
+        }
+        var root = SolveRoot(F, guess);
+        return root.HasValue ? FR(root.Value) : FormulaResult.Error("#NUM!");
+    }
+
+    // ==================== Database (Dxxx) ====================
+
+    private enum DbAgg { Sum, Count, CountA, Average, Max, Min, Product, Get, StdevS, StdevP, VarS, VarP }
+
+    // Dxxx(database, field, criteria): aggregate one column of a table over rows
+    // matching a criteria block. database row 0 = field headers; criteria row 0 =
+    // criteria field headers, rows 1..n = criteria sets (AND within a row, OR
+    // across rows) — the standard Excel D-function contract.
+    private static FormulaResult? EvalDatabase(List<object> args, DbAgg agg)
+    {
+        if (args.Count < 3) return null;
+        var db = AsRangeData(args[0]);
+        var crit = AsRangeData(args[2]);
+        if (db == null || crit == null || db.Rows < 2 || crit.Rows < 1) return null;
+
+        // Resolve the aggregated column: numeric field = 1-based index, else
+        // match a header (case-insensitive).
+        int fieldCol = ResolveDbField(db, args[1]);
+        if (fieldCol < 0) return FormulaResult.Error("#VALUE!");
+
+        var matched = new List<FormulaResult?>();
+        for (int r = 1; r < db.Rows; r++)
+            if (DbRowMatches(db, r, crit))
+                matched.Add(db.Cells[r, fieldCol]);
+
+        var nums = matched.Where(c => c?.IsNumeric == true).Select(c => c!.NumericValue!.Value).ToList();
+
+        switch (agg)
+        {
+            case DbAgg.Count: return FR(nums.Count);
+            case DbAgg.CountA: return FR(matched.Count(c => c != null && !c.IsBlank && c.AsString() != ""));
+            case DbAgg.Sum: return FR(nums.Sum());
+            case DbAgg.Product: return FR(nums.Aggregate(1.0, (a, b) => a * b));
+            case DbAgg.Average: return nums.Count > 0 ? FR(nums.Average()) : FormulaResult.Error("#DIV/0!");
+            case DbAgg.Max: return nums.Count > 0 ? FR(nums.Max()) : FR(0);
+            case DbAgg.Min: return nums.Count > 0 ? FR(nums.Min()) : FR(0);
+            case DbAgg.Get:
+                if (matched.Count == 0) return FormulaResult.Error("#VALUE!");
+                if (matched.Count > 1) return FormulaResult.Error("#NUM!");
+                return matched[0] ?? FR(0);
+            // Reuse the shared sample/population helpers so D-stats stay
+            // bit-identical to STDEV/STDEVP/VAR/VARP (same #DIV/0! guards).
+            case DbAgg.StdevS: return EvalStdev(nums.ToArray(), sample: true);
+            case DbAgg.StdevP: return EvalStdev(nums.ToArray(), sample: false);
+            case DbAgg.VarS: return EvalVar(nums.ToArray(), sample: true);
+            case DbAgg.VarP: return EvalVar(nums.ToArray(), sample: false);
+        }
+        return null;
+    }
+
+    // field can be a column header string or a 1-based column index.
+    private static int ResolveDbField(RangeData db, object fieldArg)
+    {
+        var fr = fieldArg as FormulaResult;
+        if (fr?.IsNumeric == true)
+        {
+            int idx = (int)fr.NumericValue!.Value - 1;
+            return idx >= 0 && idx < db.Cols ? idx : -1;
+        }
+        string name = fr?.AsString() ?? "";
+        for (int c = 0; c < db.Cols; c++)
+            if (string.Equals(db.Cells[0, c]?.AsString() ?? "", name, StringComparison.OrdinalIgnoreCase))
+                return c;
+        return -1;
+    }
+
+    // A record matches if ANY criteria row is satisfied; a criteria row is
+    // satisfied when EVERY non-empty criteria cell matches the same-named db column.
+    private static bool DbRowMatches(RangeData db, int dbRow, RangeData crit)
+    {
+        for (int cr = 1; cr < crit.Rows; cr++)
+        {
+            bool rowOk = true;
+            for (int cc = 0; cc < crit.Cols; cc++)
+            {
+                var critCell = crit.Cells[cr, cc];
+                string critStr = critCell?.AsString() ?? "";
+                if (critCell == null || critCell.IsBlank || critStr == "") continue;   // no constraint
+
+                int dbCol = -1;
+                string header = crit.Cells[0, cc]?.AsString() ?? "";
+                for (int c = 0; c < db.Cols; c++)
+                    if (string.Equals(db.Cells[0, c]?.AsString() ?? "", header, StringComparison.OrdinalIgnoreCase)) { dbCol = c; break; }
+                if (dbCol < 0) { rowOk = false; break; }
+
+                if (!MatchesCriteria(db.Cells[dbRow, dbCol], critStr)) { rowOk = false; break; }
+            }
+            if (rowOk) return true;
+        }
+        return false;
     }
 }
