@@ -105,9 +105,16 @@ public partial class WordHandler
             if (ratio > 0)
                 parts.Add($"line-height:{ratio:0.####}");
         }
-        if (rpr.GetFirstChild<Bold>() != null)
+        // Bold/Italic are OnOff toggles: ON when the element is present with
+        // no val or a true val, OFF when val is "0"/false. The marker level rPr
+        // commonly carries <w:i w:val="0"/> to turn OFF an italic inherited from
+        // the surrounding context — treating the element's mere presence as ON
+        // wrongly italicized an upright numbered marker. Mirror the run path.
+        var markerBold = rpr.GetFirstChild<Bold>();
+        if (markerBold != null && (markerBold.Val == null || markerBold.Val.Value))
             parts.Add("font-weight:bold");
-        if (rpr.GetFirstChild<Italic>() != null)
+        var markerItalic = rpr.GetFirstChild<Italic>();
+        if (markerItalic != null && (markerItalic.Val == null || markerItalic.Val.Value))
             parts.Add("font-style:italic");
         return string.Join(";", parts);
     }
