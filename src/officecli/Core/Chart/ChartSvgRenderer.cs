@@ -75,6 +75,11 @@ internal partial class ChartSvgRenderer
     // sub-intervals between major ticks; lighter stroke so they stay
     // subordinate to the major gridlines. Synced from ChartInfo.
     public bool ShowValMinorGridlines { get; set; }
+    // Category-axis minor gridlines (<c:catAx><c:minorGridlines/>). PowerPoint
+    // draws these as thin lines at the category-slot boundaries; ChartInfo read
+    // it but the renderer had no consumer (val minor was rendered, cat minor was
+    // dropped). Synced from ChartInfo.CatMinorGridlines.
+    public bool ShowCatMinorGridlines { get; set; }
     // Number of minor sub-intervals per major interval (PowerPoint default 5).
     public int MinorGridlineCount { get; set; } = 5;
     // Axis visibility (<c:delete val="1"/> deletes the axis). When false the
@@ -458,6 +463,13 @@ internal partial class ChartSvgRenderer
                 var gy = oy + (double)ph * i / Math.Max(catCount, 1);
                 sb.AppendLine($"        <line x1=\"{plotOx}\" y1=\"{gy:0.#}\" x2=\"{plotOx + plotPw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
             }
+            // Category-axis minor gridlines (horizontal, at slot boundaries).
+            if (ShowCatMinorGridlines && CatAxisVisible)
+            for (int i = 0; i <= catCount; i++)
+            {
+                var gy = oy + (double)ph * i / Math.Max(catCount, 1);
+                sb.AppendLine($"        <line x1=\"{plotOx}\" y1=\"{gy:0.#}\" x2=\"{plotOx + plotPw}\" y2=\"{gy:0.#}\" stroke=\"{GridColor}\" stroke-width=\"0.25\" opacity=\"0.5\"/>");
+            }
             sb.AppendLine($"        <line x1=\"{plotOx}\" y1=\"{oy}\" x2=\"{plotOx}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
             sb.AppendLine($"        <line x1=\"{plotOx}\" y1=\"{oy + ph}\" x2=\"{plotOx + plotPw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
             // Zero baseline when the domain straddles zero (negative data present).
@@ -695,6 +707,14 @@ internal partial class ChartSvgRenderer
             {
                 var gx = ox + (double)pw * i / Math.Max(catCount, 1);
                 sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+            }
+            // Category-axis minor gridlines (vertical) — thin lines at the same slot
+            // boundaries (PowerPoint draws cat minor gridlines there; was dropped).
+            if (ShowCatMinorGridlines && CatAxisVisible)
+            for (int i = 0; i <= catCount; i++)
+            {
+                var gx = ox + (double)pw * i / Math.Max(catCount, 1);
+                sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.25\" opacity=\"0.5\"/>");
             }
             sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy}\" x2=\"{ox}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
             sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy + ph}\" x2=\"{ox + pw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -1306,6 +1326,13 @@ internal partial class ChartSvgRenderer
         {
             var gx = ox + (double)pw * i / Math.Max(catCount, 1);
             sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+        }
+        // Category-axis minor gridlines (vertical, at slot boundaries).
+        if (ShowCatMinorGridlines && CatAxisVisible)
+        for (int i = 0; i <= catCount; i++)
+        {
+            var gx = ox + (double)pw * i / Math.Max(catCount, 1);
+            sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.25\" opacity=\"0.5\"/>");
         }
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy}\" x2=\"{ox}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy + ph}\" x2=\"{ox + pw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -1974,6 +2001,13 @@ internal partial class ChartSvgRenderer
         {
             var gx = ox + (double)pw * i / Math.Max(catCount, 1);
             sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.5\"/>");
+        }
+        // Category-axis minor gridlines (vertical, at slot boundaries).
+        if (ShowCatMinorGridlines && CatAxisVisible)
+        for (int i = 0; i <= catCount; i++)
+        {
+            var gx = ox + (double)pw * i / Math.Max(catCount, 1);
+            sb.AppendLine($"        <line x1=\"{gx:0.#}\" y1=\"{oy}\" x2=\"{gx:0.#}\" y2=\"{oy + ph}\" stroke=\"{GridColor}\" stroke-width=\"0.25\" opacity=\"0.5\"/>");
         }
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy}\" x2=\"{ox}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
         sb.AppendLine($"        <line x1=\"{ox}\" y1=\"{oy + ph}\" x2=\"{ox + pw}\" y2=\"{oy + ph}\" stroke=\"{AxisLineColor}\" stroke-width=\"1\"/>");
@@ -4198,6 +4232,7 @@ internal partial class ChartSvgRenderer
         ShowValGridlines = info.ValMajorGridlines;
         ShowCatGridlines = info.CatMajorGridlines;
         ShowValMinorGridlines = info.ValMinorGridlines;
+        ShowCatMinorGridlines = info.CatMinorGridlines;
         ValAxisVisible = info.ValAxisVisible;
         CatAxisVisible = info.CatAxisVisible;
         ValMajorTickMark = info.ValMajorTickMark;
