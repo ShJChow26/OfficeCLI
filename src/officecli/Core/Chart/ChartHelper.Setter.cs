@@ -303,23 +303,48 @@ internal static partial class ChartHelper
                 }
 
                 case "legend":
-                    chart.RemoveAllChildren<C.Legend>();
-                    if (!value.Equals("false", StringComparison.OrdinalIgnoreCase) &&
-                        !value.Equals("none", StringComparison.OrdinalIgnoreCase))
+                    if (value.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+                        value.Equals("none", StringComparison.OrdinalIgnoreCase))
                     {
-                        // CONSISTENCY(strict-enums / R34-1): unknown legend
-                        // positions used to silently fall through to "bottom",
-                        // producing a contradictory "Updated: legend=hidden"
-                        // success message while the file actually carried
-                        // legend=bottom. Reject up front with the valid set
-                        // so users see typos at Set time.
-                        var pos = ParseLegendPosition(value);
-                        var plotVisOnly = chart.GetFirstChild<C.PlotVisibleOnly>();
-                        var insertBefore = plotVisOnly as OpenXmlElement ?? chart.LastChild;
-                        chart.InsertBefore(new C.Legend(
-                            new C.LegendPosition { Val = pos },
-                            new C.Overlay { Val = false }
-                        ), insertBefore);
+                        // Turn the legend off entirely.
+                        chart.RemoveAllChildren<C.Legend>();
+                    }
+                    else
+                    {
+                        // CONSISTENCY(strict-enums / R34-1): validate the position
+                        // BEFORE mutating, so an unknown value (typo) is rejected
+                        // without disturbing the existing legend.
+                        // BUGFIX (EnumExhaustivenessScanTests): the schema lists
+                        // `true` as a valid legend value (mirror of `false`=hide), so
+                        // `legend=true` must show the legend at the default position
+                        // (right) rather than erroring as an invalid position.
+                        var pos = value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                            ? C.LegendPositionValues.Right
+                            : ParseLegendPosition(value);
+                        var legend = chart.GetFirstChild<C.Legend>();
+                        if (legend == null)
+                        {
+                            var plotVisOnly = chart.GetFirstChild<C.PlotVisibleOnly>();
+                            var insertBefore = plotVisOnly as OpenXmlElement ?? chart.LastChild;
+                            chart.InsertBefore(new C.Legend(
+                                new C.LegendPosition { Val = pos },
+                                new C.Overlay { Val = false }
+                            ), insertBefore);
+                        }
+                        else
+                        {
+                            // BUGFIX (CompanionInterferenceScanTests): the legend
+                            // already exists — only change its POSITION, preserving
+                            // txPr (legend font), overlay, legendEntry, layout, spPr,
+                            // etc. The previous RemoveAllChildren<Legend> + rebuild
+                            // wiped legendFont whenever the user only changed the
+                            // legend position. CT_Legend order: legendPos is first.
+                            var posEl = legend.GetFirstChild<C.LegendPosition>();
+                            if (posEl != null)
+                                posEl.Val = pos;
+                            else
+                                legend.InsertAt(new C.LegendPosition { Val = pos }, 0);
+                        }
                     }
                     break;
 
@@ -357,6 +382,15 @@ internal static partial class ChartHelper
                     foreach (var chartTypeEl in plotArea2.ChildElements
                         .Where(e => e.LocalName.Contains("Chart") || e.LocalName.Contains("chart")))
                     {
+                        // BUGFIX (CompanionInterferenceScanTests): capture an
+                        // existing dLblPos before the rebuild. `dataLabels=value`
+                        // (content only, no position token) used to wipe a
+                        // previously-set `labelPos` because RemoveAllChildren +
+                        // rebuild produced a fresh dLbls with no position. If the
+                        // new value carries no position token, carry the old one
+                        // over (it was already valid for this chart type).
+                        var preservedDLblPos = chartTypeEl.GetFirstChild<C.DataLabels>()
+                            ?.GetFirstChild<C.DataLabelPosition>()?.Val;
                         chartTypeEl.RemoveAllChildren<C.DataLabels>();
                         if (!value.Equals("none", StringComparison.OrdinalIgnoreCase))
                         {
@@ -437,6 +471,13 @@ internal static partial class ChartHelper
                                     };
                                     dl.AppendChild(new C.DataLabelPosition { Val = dLblPos });
                                 }
+                            }
+                            else if (preservedDLblPos != null)
+                            {
+                                // No position token in the new value — preserve the
+                                // pre-existing dLblPos so content-only updates don't
+                                // drop the label position.
+                                dl.AppendChild(new C.DataLabelPosition { Val = preservedDLblPos });
                             }
                             // Insert dLbls before dropLines/hiLowLines/upDownBars/gapWidth/overlap/
                             // showMarker/holeSize/firstSliceAngle/axId per schema order. CT_StockChart
@@ -1173,6 +1214,11 @@ internal static partial class ChartHelper
                     var plotArea2 = chart.GetFirstChild<C.PlotArea>();
                     if (plotArea2 == null) { unsupported.Add(key); break; }
                     var alphaPercent = ParseHelpers.SafeParseDouble(value, key);
+                    // BUGFIX (NumericBoundaryScanTests): transparency/opacity/alpha
+                    // are 0-100 percent. Out-of-range input drove the computed
+                    // <a:alpha val> outside [0,100000] → schema-invalid file.
+                    if (double.IsNaN(alphaPercent) || double.IsInfinity(alphaPercent) || alphaPercent < 0 || alphaPercent > 100)
+                        throw new ArgumentException($"Invalid {key}: '{value}'. Expected a percentage 0-100.");
                     // If key is "transparency", convert to opacity (e.g. 30% transparency = 70% opacity)
                     if (key.Equals("transparency", StringComparison.OrdinalIgnoreCase))
                         alphaPercent = 100.0 - alphaPercent;
@@ -1407,6 +1453,11 @@ internal static partial class ChartHelper
                     var plotArea2 = chart.GetFirstChild<C.PlotArea>();
                     if (plotArea2 == null) { unsupported.Add(key); break; }
                     if (!int.TryParse(value, out var gw)) throw new ArgumentException($"Invalid gapWidth: '{value}'. Expected integer (0-500).");
+                    // BUGFIX (NumericBoundaryScanTests): enforce the stated 0-500
+                    // range. CT_GapAmount is ST_GapAmountUShort (0-500); out-of-range
+                    // (incl. negatives wrapping via (ushort) cast) produced a
+                    // schema-invalid c:gapWidth PowerPoint refuses to open.
+                    if (gw < 0 || gw > 500) throw new ArgumentException($"Invalid gapWidth: '{value}'. Expected integer 0-500.");
                     bool gapUpdated = false;
                     foreach (var gapEl in plotArea2.Descendants<C.GapWidth>())
                     {

@@ -1137,6 +1137,13 @@ public partial class PowerPointHandler
                     var spPr = shape.ShapeProperties;
                     if (spPr == null) { unsupported.Add(key); break; }
                     var outline = EnsureOutline(spPr);
+                    // BUGFIX (CompanionInterferenceScanTests): preserve a
+                    // previously-set miter limit when re-affirming lineJoin=miter
+                    // without an inline limit token. Same rebuild-drops-sibling
+                    // family as the autoFit/legend/labelPos fixes — RemoveAllChildren
+                    // + fresh <a:miter> used to wipe the lim attribute set via the
+                    // standalone miterLimit= property.
+                    var prevMiterLimit = outline.GetFirstChild<Drawing.Miter>()?.Limit;
                     outline.RemoveAllChildren<Drawing.Round>();
                     outline.RemoveAllChildren<Drawing.LineJoinBevel>();
                     outline.RemoveAllChildren<Drawing.Miter>();
@@ -1158,7 +1165,7 @@ public partial class PowerPointHandler
                         "bevel" => new Drawing.LineJoinBevel(),
                         "miter" => compoundMiterLimit.HasValue
                             ? new Drawing.Miter { Limit = compoundMiterLimit.Value }
-                            : new Drawing.Miter(),
+                            : (prevMiterLimit != null ? new Drawing.Miter { Limit = prevMiterLimit } : new Drawing.Miter()),
                         _ => throw new ArgumentException($"Invalid 'lineJoin' value: '{joinValue}'. Valid values: round, bevel, miter.")
                     };
                     // CT_LineProperties schema: ... → prstDash → (round|bevel|miter) → headEnd → tailEnd
@@ -1184,6 +1191,10 @@ public partial class PowerPointHandler
                     if (!int.TryParse(value, System.Globalization.NumberStyles.Integer,
                             System.Globalization.CultureInfo.InvariantCulture, out var limVal))
                         throw new ArgumentException($"Invalid 'miterLimit' value: '{value}'. Expected integer (1000ths of a percent, e.g. 800000 = 800%).");
+                    // BUGFIX (NumericBoundaryScanTests): <a:miter lim> is a
+                    // non-negative percentage; a negative value is schema-invalid.
+                    if (limVal < 0)
+                        throw new ArgumentException($"Invalid 'miterLimit' value: '{value}'. Must be >= 0 (1000ths of a percent, e.g. 800000 = 800%).");
                     var outline = EnsureOutline(spPr);
                     var miterEl = outline.GetFirstChild<Drawing.Miter>();
                     if (miterEl == null)
@@ -1273,6 +1284,11 @@ public partial class PowerPointHandler
                     if (spPr == null) { unsupported.Add(key); break; }
                     if (!double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var lnOpacity) || double.IsNaN(lnOpacity) || double.IsInfinity(lnOpacity))
                         throw new ArgumentException($"Invalid 'lineopacity' value: '{value}'. Expected a finite decimal 0.0-1.0 (e.g. 0.5 = 50% opacity).");
+                    // BUGFIX (NumericBoundaryScanTests): enforce the stated 0.0-1.0
+                    // range. Out-of-range values produced an <a:alpha> outside
+                    // [0,100000] → schema-invalid file PowerPoint refuses to open.
+                    if (lnOpacity < 0.0 || lnOpacity > 1.0)
+                        throw new ArgumentException($"Invalid 'lineopacity' value: '{value}'. Expected a decimal in 0.0-1.0 (e.g. 0.5 = 50% opacity).");
                     var outline = EnsureOutline(spPr);
                     var solidFillLn = outline.GetFirstChild<Drawing.SolidFill>();
                     if (solidFillLn == null)
@@ -1593,6 +1609,14 @@ public partial class PowerPointHandler
                 {
                     var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
                     if (bodyPr == null) { unsupported.Add(key); break; }
+                    // BUGFIX (CompanionInterferenceScanTests): capture the existing
+                    // normAutofit's scale attributes before removing it, so
+                    // re-affirming the autofit mode (autoFit=normal) doesn't wipe a
+                    // previously-set fontScale / lnSpcReduction. Same rebuild-drops-
+                    // sibling family as the chart legend/labelPos fixes.
+                    var prevNaf = bodyPr.GetFirstChild<Drawing.NormalAutoFit>();
+                    var prevFontScale = prevNaf?.FontScale;
+                    var prevLnSpcReduction = prevNaf?.LineSpaceReduction;
                     bodyPr.RemoveAllChildren<Drawing.NormalAutoFit>();
                     bodyPr.RemoveAllChildren<Drawing.ShapeAutoFit>();
                     bodyPr.RemoveAllChildren<Drawing.NoAutoFit>();
@@ -1602,7 +1626,15 @@ public partial class PowerPointHandler
                         // <a:normAutofit> IS the shrink-text-on-overflow mode; the
                         // optional fontScale/lnSpcReduction attributes carry the
                         // computed shrink ratio (callers may tune via fontScale=).
-                        case "true" or "shrink" or "normal" or "normautofit" or "auto": bodyPr.AppendChild(ApplyNormalAutoFitScale(new Drawing.NormalAutoFit(), properties)); break;
+                        case "true" or "shrink" or "normal" or "normautofit" or "auto":
+                        {
+                            var naf = ApplyNormalAutoFitScale(new Drawing.NormalAutoFit(), properties);
+                            // Carry over the prior scale when this Set didn't supply one.
+                            if (naf.FontScale == null && prevFontScale != null) naf.FontScale = prevFontScale;
+                            if (naf.LineSpaceReduction == null && prevLnSpcReduction != null) naf.LineSpaceReduction = prevLnSpcReduction;
+                            bodyPr.AppendChild(naf);
+                            break;
+                        }
                         case "shape" or "spautofit" or "resize": bodyPr.AppendChild(new Drawing.ShapeAutoFit()); break;
                         case "false" or "none": bodyPr.AppendChild(new Drawing.NoAutoFit()); break;
                         default: throw new ArgumentException($"Invalid autofit value: '{value}'. Valid values: true/shrink/normal, shape/resize, false/none.");
