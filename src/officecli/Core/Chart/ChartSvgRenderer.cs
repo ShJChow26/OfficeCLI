@@ -4806,7 +4806,30 @@ internal partial class ChartSvgRenderer
                 // <c:legendEntry> delete: hide this series' swatch+label (it still plots).
                 if (info.DeletedLegendEntries.Contains(i)) continue;
                 var color = i < info.Colors.Count ? info.Colors[i] : DefaultColors[i % DefaultColors.Length];
-                sb.Append($"<span style=\"display:inline-flex;align-items:center;gap:4px\"><span style=\"display:inline-block;width:12px;height:12px;background:{color};border-radius:1px\"></span>{HtmlEncode(info.Series[i].name)}</span>");
+                // Line/scatter legend keys are a short line segment (matching the
+                // series stroke width + dash) plus the series marker, not a filled
+                // square — PowerPoint keys the legend by chart type. The marker is
+                // overlaid only when the series genuinely carries one (faithful to
+                // OOXML; no default markers added).
+                var isLineLegend = info.ChartType.Contains("line") || info.ChartType.Contains("scatter");
+                string swatch;
+                if (isLineLegend)
+                {
+                    var lw = i < info.LineWidths.Count && info.LineWidths[i] > 0 ? info.LineWidths[i] : 2.0;
+                    var dash = i < info.LineDashes.Count ? info.LineDashes[i] : "solid";
+                    var dashAttr = !string.IsNullOrEmpty(dash) && dash != "solid" ? $" stroke-dasharray=\"{RefLineDashArray(dash)}\"" : "";
+                    var mShape = i < info.MarkerShapes.Count ? info.MarkerShapes[i] : "none";
+                    var markerSvg = !string.IsNullOrEmpty(mShape) && mShape != "none"
+                        ? RenderMarkerSvg(mShape, 8, 5, 3, color, color) : "";
+                    var lineSvg = info.ScatterMarkersOnly
+                        ? "" : $"<line x1=\"0\" y1=\"5\" x2=\"16\" y2=\"5\" stroke=\"{color}\" stroke-width=\"{lw:0.##}\"{dashAttr}/>";
+                    swatch = $"<svg width=\"16\" height=\"10\" style=\"vertical-align:middle\">{lineSvg}{markerSvg}</svg>";
+                }
+                else
+                {
+                    swatch = $"<span style=\"display:inline-block;width:12px;height:12px;background:{color};border-radius:1px\"></span>";
+                }
+                sb.Append($"<span style=\"display:inline-flex;align-items:center;gap:4px\">{swatch}{HtmlEncode(info.Series[i].name)}</span>");
             }
             // Reference-line entries render as a dashed swatch beside the regular series.
             foreach (var rl in info.ReferenceLines)
