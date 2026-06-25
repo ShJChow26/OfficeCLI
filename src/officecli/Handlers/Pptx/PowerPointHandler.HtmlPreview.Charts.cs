@@ -57,7 +57,7 @@ public partial class PowerPointHandler
                 var cxChart = extPart.ChartSpace?
                     .GetFirstChild<DocumentFormat.OpenXml.Office2016.Drawing.ChartDrawing.Chart>();
                 if (cxChart == null) return;
-                info = ChartSvgRenderer.ExtractCxChartInfo(cxChart);
+                info = ChartSvgRenderer.ExtractCxChartInfo(cxChart, themeColors);
                 chart = null;
                 plotArea = null;
             }
