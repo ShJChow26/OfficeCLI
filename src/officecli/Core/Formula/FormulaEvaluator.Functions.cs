@@ -161,6 +161,8 @@ internal partial class FormulaEvaluator
             "TRUE" => FR_B(true), "FALSE" => FR_B(false),
             "IFERROR" or "IFNA" => arg(0) is { IsError: true } ? arg(1) : arg(0),
             "SWITCH" => EvalSwitch(args), "CHOOSE" => EvalChoose(args),
+            "REDUCE" => EvalReduce(args),
+            "ISOMITTED" => FR_B(args.Count > 0 && IsOmittedArg(args[0])),
 
             // ===== Text =====
             "CONCATENATE" or "CONCAT" => FR_S(string.Concat(AllArgs(args).Select(r => r.AsString()))),
@@ -347,6 +349,34 @@ internal partial class FormulaEvaluator
         int s = (int)sh * (left ? 1 : -1);
         double result = s >= 0 ? (long)n << s : (long)n >> -s;
         return FR(result);
+    }
+
+    // REDUCE(initial, array, lambda) — fold the array through a 2-parameter
+    // LAMBDA(accumulator, value), returning the final scalar accumulator.
+    private FormulaResult? EvalReduce(List<object> args)
+    {
+        if (args.Count < 3) return null;
+        var acc = args[0] as FormulaResult ?? FormulaResult.Number(0);
+        if (args[2] is not FormulaResult { IsLambda: true } lam) return FormulaResult.Error("#VALUE!");
+        var lambda = (Lambda)lam.LambdaValue!;
+        foreach (var el in EnumerateElements(args[1]))
+            acc = InvokeLambda(lambda, new List<FormulaResult> { acc, el });
+        return acc;
+    }
+
+    // Flatten a range/array/scalar argument into element FormulaResults.
+    private static IEnumerable<FormulaResult> EnumerateElements(object? a)
+    {
+        if (AsRangeData(a) is { } rd)
+        {
+            for (int r = 0; r < rd.Rows; r++)
+                for (int c = 0; c < rd.Cols; c++)
+                    yield return rd.Cells[r, c] ?? FormulaResult.Blank();
+        }
+        else if (a is FormulaResult { IsArray: true } arr)
+            foreach (var v in arr.ArrayValue!) yield return FormulaResult.Number(v);
+        else if (a is FormulaResult fr)
+            yield return fr;
     }
 
     // SUBTOTAL(function_num, ref1, ...): function_num 1-11 (and 101-111 = ignore-hidden, treated
@@ -919,7 +949,7 @@ internal partial class FormulaEvaluator
         {
             try
             {
-                var wsPart = (DocumentFormat.OpenXml.Packaging.WorksheetPart)_workbookPart.GetPartById(sheets[i].Id!.Value!);
+                var wsPart = (DocumentFormat.OpenXml.Packaging.WorksheetPart)_workbookPart!.GetPartById(sheets[i].Id!.Value!);
                 if (ReferenceEquals(wsPart.Worksheet.GetFirstChild<DocumentFormat.OpenXml.Spreadsheet.SheetData>(), _sheetData))
                     return i + 1;
             }
