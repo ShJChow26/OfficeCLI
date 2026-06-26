@@ -493,35 +493,46 @@ public static class McpServer
     private static RootCommand? _rootCommand;
     private static RootCommand RootCommand => _rootCommand ??= CommandBuilder.BuildRootCommand();
 
+    private readonly record struct CliResult(int Exit, string Stdout, string Stderr);
+
     /// <summary>
-    /// Parse+invoke argv through the shared CLI root, capturing stdout.
-    /// Parse/validation failures (the free win — same messages the CLI gives)
-    /// throw before any handler runs. argv is the CLI token vector, e.g.
-    /// ["get", file, "/body", "--depth", "1", "--json"].
+    /// Parse+invoke argv through the shared CLI root, capturing stdout AND
+    /// stderr and the exit code. Parse/validation failures (the free win — same
+    /// messages the CLI gives) throw before any handler runs. argv is the CLI
+    /// token vector, e.g. ["get", file, "/body", "--depth", "1", "--json"].
     /// </summary>
-    private static string RunCli(params string[] argv)
+    private static CliResult RunCliRaw(string[] argv)
     {
         var pr = RootCommand.Parse(argv);
         if (pr.Errors.Count > 0)
             throw new ArgumentException(string.Join("; ", pr.Errors.Select(e => e.Message)));
         var prevOut = Console.Out;
-        var sw = new System.IO.StringWriter();
-        try { Console.SetOut(sw); pr.Invoke(); }
-        finally { Console.SetOut(prevOut); }
-        return sw.ToString();
+        var prevErr = Console.Error;
+        var so = new System.IO.StringWriter();
+        var se = new System.IO.StringWriter();
+        int exit;
+        try { Console.SetOut(so); Console.SetError(se); exit = pr.Invoke(); }
+        finally { Console.SetOut(prevOut); Console.SetError(prevErr); }
+        return new CliResult(exit, so.ToString(), se.ToString());
     }
 
     /// <summary>
     /// Run a --json CLI command and return its `data` payload, unwrapped from
     /// the {success,data} envelope so the MCP response keeps its existing bare
-    /// shape. A success:false envelope throws → MCP isError.
+    /// shape. A success:false envelope throws → MCP isError. (--json commands
+    /// emit the error envelope on stdout, so exit code is not consulted here.)
     /// </summary>
     private static string RunCliJsonData(params string[] argv)
     {
-        var outText = RunCli(argv).Trim();
+        var r = RunCliRaw(argv);
+        var outText = r.Stdout.Trim();
         JsonNode? env;
         try { env = JsonNode.Parse(outText); }
-        catch { return outText; }
+        catch
+        {
+            if (r.Exit != 0) throw new ArgumentException(StripErrPrefix(FirstNonEmpty(r.Stderr, outText)));
+            return outText;
+        }
         if (env is JsonObject obj)
         {
             if (obj.TryGetPropertyValue("success", out var s) && s is not null && !s.GetValue<bool>())
@@ -531,6 +542,28 @@ public static class McpServer
         }
         return outText;
     }
+
+    /// <summary>
+    /// Run a text-output CLI command (raw XML, "Created ...", validate report).
+    /// stdout is the result; a non-zero exit throws the stderr message — the
+    /// text-mode handlers write "Error: ..." to stderr and signal via exit code
+    /// rather than a JSON envelope.
+    /// </summary>
+    private static string RunCliText(params string[] argv)
+    {
+        var r = RunCliRaw(argv);
+        if (r.Exit != 0)
+            throw new ArgumentException(StripErrPrefix(FirstNonEmpty(r.Stderr.Trim(), r.Stdout.Trim())));
+        return r.Stdout.TrimEnd('\n', '\r');
+    }
+
+    private static string FirstNonEmpty(params string[] xs) =>
+        xs.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? "Command failed.";
+
+    // The MCP catch block prepends "Error: "; the text-mode handlers already
+    // wrote "Error: ..." to stderr. Strip one leading prefix to avoid doubling.
+    private static string StripErrPrefix(string s) =>
+        s.StartsWith("Error: ", StringComparison.Ordinal) ? s["Error: ".Length..] : s;
 
     /// <summary>
     /// Pull the human-readable message out of a failure envelope. Two shapes
@@ -565,9 +598,15 @@ public static class McpServer
         {
             case "create":
             {
-                var file = Arg("file");
-                BlankDocCreator.Create(file);
-                return $"Created {file}";
+                // Routed through the shared root: gains file-extension/required
+                // validation and the --type/--force/--locale/--minimal flags the
+                // inline path silently ignored.
+                var argv = new List<string> { "create", Arg("file") };
+                var ctype = Arg("type"); if (!string.IsNullOrEmpty(ctype)) { argv.Add("--type"); argv.Add(ctype); }
+                var locale = Arg("locale"); if (!string.IsNullOrEmpty(locale)) { argv.Add("--locale"); argv.Add(locale); }
+                if (string.Equals(Arg("force"), "true", StringComparison.OrdinalIgnoreCase)) argv.Add("--force");
+                if (string.Equals(Arg("minimal"), "true", StringComparison.OrdinalIgnoreCase)) argv.Add("--minimal");
+                return RunCliText(argv.ToArray());
             }
             case "view":
             {
@@ -617,21 +656,15 @@ public static class McpServer
             }
             case "query":
             {
-                var file = Arg("file");
-                var selector = Arg("selector");
+                // Routed through the shared root. argv mirrors
+                // `officecli query <file> <selector> [--find text] --json`; the
+                // Excel cell-alias resolution, r"regex" text filter, and
+                // selector warnings all live in the one CLI implementation. We
+                // unwrap `data` to keep the bare {matches,results} shape.
+                var argv = new List<string> { "query", Arg("file"), Arg("selector"), "--json" };
                 var textFilter = Arg("text");
-                using var handler = DocumentHandlerFactory.Open(file);
-                Func<string, string>? keyResolver =
-                    handler is OfficeCli.Handlers.ExcelHandler
-                    && OfficeCli.Handlers.ExcelHandler.SelectorTargetsCells(selector)
-                        ? OfficeCli.Handlers.ExcelHandler.ResolveCellAttributeAlias : null;
-                var (results, queryWarnings) = AttributeFilter.FilterSelector(selector, handler.Query, keyResolver);
-                if (!string.IsNullOrEmpty(textFilter))
-                    // MatchesTextFilter (not plain Contains) so the text filter
-                    // honours r"regex" the same way the CLI and resident query do.
-                    results = results.Where(n => n.Text != null && AttributeFilter.MatchesTextFilter(n.Text, textFilter)).ToList();
-                foreach (var w in queryWarnings) Console.Error.WriteLine(w);
-                return OutputFormatter.FormatNodes(results, OutputFormat.Json);
+                if (!string.IsNullOrEmpty(textFilter)) { argv.Add("--find"); argv.Add(textFilter); }
+                return RunCliJsonData(argv.ToArray());
             }
             case "set":
                 return ExecuteMutation(Arg("file"), new BatchItem
@@ -681,15 +714,8 @@ public static class McpServer
                 });
             }
             case "validate":
-            {
-                var file = Arg("file");
-                using var handler = DocumentHandlerFactory.Open(file);
-                var errors = handler.Validate();
-                if (errors.Count == 0) return "Validation passed: no errors found.";
-                var lines = errors.Select(e => $"[{e.ErrorType}] {e.Description}" +
-                    (e.Path != null ? $" (Path: {e.Path})" : ""));
-                return $"Found {errors.Count} error(s):\n{string.Join("\n", lines)}";
-            }
+                // Routed through the shared root (text report on stdout).
+                return RunCliText("validate", Arg("file"));
             case "batch":
             {
                 var file = Arg("file");
@@ -738,10 +764,15 @@ public static class McpServer
                 });
             case "raw":
             {
-                var file = Arg("file");
+                // Routed through the shared root: gains the --start/--end/--cols
+                // Excel windowing the inline path dropped (it always passed
+                // null,null,null), so a huge sheet no longer dumps in full.
                 var part = Arg("part"); if (string.IsNullOrEmpty(part)) part = "/document";
-                using var handler = DocumentHandlerFactory.Open(file);
-                return handler.Raw(part, null, null, null);
+                var argv = new List<string> { "raw", Arg("file"), part };
+                var start = ArgIntOpt("start"); if (start.HasValue) { argv.Add("--start"); argv.Add(start.Value.ToString()); }
+                var end = ArgIntOpt("end"); if (end.HasValue) { argv.Add("--end"); argv.Add(end.Value.ToString()); }
+                var cols = Arg("cols"); if (!string.IsNullOrEmpty(cols)) { argv.Add("--cols"); argv.Add(cols); }
+                return RunCliText(argv.ToArray());
             }
             case "help":
             {
@@ -963,6 +994,11 @@ Paths are 1-based: /slide[1]/shape[2], /body/p[3], /Sheet1/A1. Props are key=val
         w.WriteStartObject("force"); w.WriteString("type", "string"); w.WriteString("description", "Set to 'true' to continue batch on error (default: stop on first error)"); w.WriteEndObject();
         // part
         w.WriteStartObject("part"); w.WriteString("type", "string"); w.WriteString("description", "Part path for raw (e.g. /document, /styles, /slide[1])"); w.WriteEndObject();
+        // cols (raw: Excel column filter)
+        w.WriteStartObject("cols"); w.WriteString("type", "string"); w.WriteString("description", "Column filter for raw on Excel sheets, comma-separated (e.g. A,B,C). Pair with start/end to window a large sheet instead of dumping the whole part."); w.WriteEndObject();
+        // locale / minimal (create)
+        w.WriteStartObject("locale"); w.WriteString("type", "string"); w.WriteString("description", "For create (.docx): locale tag (e.g. zh-CN, ja, ar) setting per-script default fonts and RTL for Arabic/Hebrew. Pass en-US to force a deterministic LTR baseline."); w.WriteEndObject();
+        w.WriteStartObject("minimal"); w.WriteString("type", "string"); w.WriteString("description", "For create (.docx): set 'true' to skip Word's Normal baseline and emit a raw OOXML-spec docx (compact / edge-case testing)."); w.WriteEndObject();
         // format
         w.WriteStartObject("format"); w.WriteString("type", "string"); w.WriteString("description", "Document format for help: xlsx, pptx, docx"); w.WriteEndObject();
         // name (for load_skill)
