@@ -376,8 +376,32 @@ async function ensureCliBinary(binary, autoInstall) {
   return binary;
 }
 
+// Quote one token for a cmd.exe command line: wrap in double quotes when it
+// holds whitespace or a cmd metacharacter, doubling any embedded quote. Plain
+// tokens pass through unquoted. (Windows filenames can't contain '"', so the
+// escape is just defensive.)
+function quoteForCmd(s) {
+  if (s === '') return '""';
+  return /[\s&|<>^()"]/.test(s) ? `"${String(s).replace(/"/g, '""')}"` : String(s);
+}
+
 function runCli(binary, argv) {
-  const r = spawnSync(binary, argv, { encoding: 'utf8' });
+  let cmd = binary;
+  let args = argv;
+  const opts = { encoding: 'utf8' };
+  if (IS_WIN && /\.(cmd|bat)$/i.test(binary)) {
+    // Node refuses to spawn a .cmd/.bat directly without a shell since
+    // CVE-2024-27980 (raises EINVAL). Run it through cmd.exe ourselves,
+    // quoting each token so paths with spaces survive — shell:true would
+    // join the args unquoted and break on the first space. Mirrors Node's
+    // own shell idiom (cmd /d /s /c "<line>" + windowsVerbatimArguments)
+    // but with the per-token quoting shell:true omits.
+    const line = [binary, ...argv].map(quoteForCmd).join(' ');
+    cmd = process.env.ComSpec || 'cmd.exe';
+    args = ['/d', '/s', '/c', `"${line}"`];
+    opts.windowsVerbatimArguments = true;
+  }
+  const r = spawnSync(cmd, args, opts);
   if (r.error && r.error.code === 'ENOENT') {
     throw new OfficeCliError(127, MISSING_CLI.replace('{bin}', JSON.stringify(binary)));
   }
