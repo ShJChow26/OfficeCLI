@@ -238,7 +238,25 @@ If the body prose contains raw `lambda_1`, `x_{t+1}`, `\alpha` or similar plain-
 2. `\mathcal{L}` → invalid OMML. Use `\mathit{L}` or plain uppercase letters.
 3. `move` on `/body/oMathPara[N]` does not reliably reposition. Workaround: `add` at target position, `remove` the original.
 
-**Equation numbering** — no native `\eqno`. Add the display equation, then add a right-aligned paragraph `"(1)"` immediately after with `spaceBefore=0 spaceAfter=6pt`. Separate line, works in 2-col. **Do NOT place `--type equation` directly in a table cell `tc[N]`** — it emits `oMathPara` as a direct `<w:tc>` child (illegal OOXML). Target `tc[N]/p[1]` with `mode=inline` if you need equations in cells.
+**Equation numbering** — no native `\eqno`. The journal-standard layout is **one line**: equation centered, number flush-right at the column edge (`Y = A(X) ⊗ X      (1)`). Build it with two paragraph **tab stops** — a `center` tab at the column mid-point and a `right` tab at the column right edge — then lay out `[tab] equation(inline) [tab] (1)` in a single paragraph. Do NOT use a centered display equation followed by a separate right-aligned `(1)` line — that splits the number onto its own line and is the most common reason agents fail to reproduce the expected look.
+
+```bash
+# Tab positions depend on the COLUMN width (twips). Default blank doc = A4, 3.18cm margins
+#   → text width = 8300 twips.
+#   single column: center tab = 4150, right tab = 8300
+#   two columns (default 720-twip gutter): col = (8300-720)/2 = 3790 → center 1895, right 3790
+# (other page size / margins: text width = pageWidth - marginLeft - marginRight; recompute.)
+officecli add "$FILE" /body --type paragraph                                   # the equation paragraph (say it lands at p[N])
+officecli add "$FILE" "/body/p[N]" --type tab --prop pos=4150 --prop val=center
+officecli add "$FILE" "/body/p[N]" --type tab --prop pos=8300 --prop val=right
+officecli add "$FILE" "/body/p[N]" --type run --prop text=$'\t'                 # tab → jump to center
+officecli add "$FILE" "/body/p[N]" --type equation --prop mode=inline --prop formula='Y = A(X) \otimes X'
+officecli add "$FILE" "/body/p[N]" --type run --prop text=$'\t(1)'             # tab → jump to right edge, then the number
+```
+
+For a two-column section just use the two-column tab positions (1895 / 3790); the same paragraph then centers the equation within its column with `(1)` at the column's right edge. Schema: `officecli help docx tab`.
+
+**Do NOT place `--type equation` directly in a table cell `tc[N]`** — it emits `oMathPara` as a direct `<w:tc>` child (illegal OOXML). Target `tc[N]/p[1]` with `mode=inline` if you need equations in cells.
 
 Full equation schema: `officecli help docx equation`.
 
