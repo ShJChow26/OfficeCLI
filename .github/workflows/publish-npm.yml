@@ -66,6 +66,7 @@ jobs:
           echo "Publishing ${{ matrix.package }}@$V"
 
       - name: Set package name, version, and match the README to this package
+        id: pkg
         working-directory: npm
         run: |
           npm pkg set name='${{ matrix.package }}'
@@ -74,8 +75,17 @@ jobs:
           # Rewrite the install/npx commands to this package's name. No-op for
           # @officecli/officecli.
           sed -i "s|@officecli/officecli|${{ matrix.package }}|g" README.md
+          # A brand-new package can't be created by trusted publishing (OIDC) —
+          # skip (green) until its one-time manual first publish creates it.
+          if npm view '${{ matrix.package }}' version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.package }} does not exist on npm yet — first publish must be manual; skipping."
+          fi
 
       - name: Publish to npm
+        if: steps.pkg.outputs.exists == 'true'
         working-directory: npm
         run: |
           TAG='${{ github.event.inputs.dist_tag }}'
