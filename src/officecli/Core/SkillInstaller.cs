@@ -51,6 +51,48 @@ internal static class SkillInstaller
         ["word-form"]       = "officecli-word-form",
     };
 
+    // One-line trigger per skill — a compact, always-on discovery lure injected
+    // into the MCP tool description. Full routing guidance stays lazy (load_skill
+    // with no name returns the catalog; name=X returns the SKILL.md). This is the
+    // "push minimal trigger, pull the detail" half of the discovery design: it
+    // costs a fraction of the full descriptions but is enough to prompt the
+    // agent to load the right skill. Keys must track SkillMap (a missing entry
+    // degrades to the bare name via BuildSkillTriggerSummary; asserted in tests).
+    private static readonly Dictionary<string, string> SkillTriggers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["pptx"]            = "slide decks / presentations",
+        ["word"]            = "Word docs, reports, letters, memos",
+        ["excel"]           = "spreadsheets, financial models, dashboards",
+        ["word-form"]       = "fillable forms, content controls, protected docs",
+        ["morph-ppt"]       = "cross-slide Morph animation / continuous motion",
+        ["morph-ppt-3d"]    = "3D Morph decks (GLB models, camera)",
+        ["pitch-deck"]      = "fundraising / investor decks (seed, Series A/B/C)",
+        ["academic-paper"]  = "academic papers / research reports",
+        ["data-dashboard"]  = "data dashboards",
+        ["financial-model"] = "financial models / projections",
+    };
+
+    /// <summary>
+    /// Compact one-line-per-skill trigger summary for the MCP tool description.
+    /// Always-on but small; the agent reads it to decide which skill to
+    /// <c>load_skill</c>. Order follows SkillMap; a skill without a curated
+    /// trigger degrades to its name so the list never silently drops a skill.
+    /// </summary>
+    public static string BuildSkillTriggerSummary()
+    {
+        var parts = SkillMap.Keys.Select(name =>
+            SkillTriggers.TryGetValue(name, out var t) ? $"{name} → {t}" : name);
+        // Directive, not merely informational: an informational phrasing ("for
+        // the full guide") was empirically ignored even by capable models, which
+        // jumped straight to create/add and guessed the schema. The imperative
+        // FIRST … BEFORE … is what actually triggers a skill load + help-first.
+        return "IMPORTANT — before you create/add/set/remove on any Office file, FIRST call "
+            + "load_skill name=<X> for that file type (it loads the build guide and tells you to "
+            + "consult `help` for the schema). Pick X by need: "
+            + string.Join(" · ", parts)
+            + ". (load_skill with no name lists all skills.)";
+    }
+
     // Bundled skill assets that cannot ride the MCP/CLI text channel intact
     // (read as text they would corrupt). Listed in the reference manifest but
     // served only via `officecli skills install`.

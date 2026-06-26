@@ -782,7 +782,10 @@ Paths are 1-based: /slide[1]/shape[2], /body/p[3], /Sheet1/A1. Props are key=val
     {
         w.WriteStartObject();
         w.WriteString("name", "officecli");
-        w.WriteString("description", ToolDescription);
+        // Append a compact always-on skill-trigger summary so the agent is
+        // prompted to load the right skill without the full ~1.2k of routing
+        // descriptions resident in context. Detail stays lazy behind load_skill.
+        w.WriteString("description", ToolDescription + "\n\n" + OfficeCli.Core.SkillInstaller.BuildSkillTriggerSummary());
         w.WriteStartObject("inputSchema");
         w.WriteString("type", "object");
         w.WriteStartObject("properties");
