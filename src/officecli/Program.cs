@@ -156,17 +156,32 @@ if (args.Length >= 1 && (args[0] == "skills" || args[0] == "skill"))
 // the same semantics.
 if (args.Length >= 1 && args[0] == "load_skill")
 {
-    if (args.Length == 2)
+    if (args.Length >= 2)
     {
-        try
+        // Optional --path <relpath> fetches one bundled reference file the
+        // skill's SKILL.md points to (manifest listed at the end of the
+        // no-path output). Mirrors the MCP load_skill path= argument.
+        string? skillRelPath = null;
+        var positional = new List<string>();
+        for (int ai = 1; ai < args.Length; ai++)
         {
-            Console.Out.Write(OfficeCli.Core.SkillInstaller.LoadSkillContent(args[1]));
-            return 0;
+            if (args[ai] == "--path" && ai + 1 < args.Length) { skillRelPath = args[++ai]; continue; }
+            positional.Add(args[ai]);
         }
-        catch (ArgumentException ex)
+        if (positional.Count == 1)
         {
-            Console.Error.WriteLine(ex.Message);
-            return 1;
+            try
+            {
+                Console.Out.Write(string.IsNullOrEmpty(skillRelPath)
+                    ? OfficeCli.Core.SkillInstaller.LoadSkillContent(positional[0])
+                    : OfficeCli.Core.SkillInstaller.LoadSkillFile(positional[0], skillRelPath));
+                return 0;
+            }
+            catch (ArgumentException ex)
+            {
+                Console.Error.WriteLine(ex.Message);
+                return 1;
+            }
         }
     }
     OfficeCli.CommandBuilder.WriteEarlyDispatchUsage("load_skill", Console.Error);

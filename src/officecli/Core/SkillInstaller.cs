@@ -48,6 +48,15 @@ internal static class SkillInstaller
         ["academic-paper"]  = "officecli-academic-paper",
         ["data-dashboard"]  = "officecli-data-dashboard",
         ["financial-model"] = "officecli-financial-model",
+        ["word-form"]       = "officecli-word-form",
+    };
+
+    // Bundled skill assets that cannot ride the MCP/CLI text channel intact
+    // (read as text they would corrupt). Listed in the reference manifest but
+    // served only via `officecli skills install`.
+    private static readonly HashSet<string> BinarySkillExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".pptx", ".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".glb", ".pdf", ".zip", ".ico",
     };
 
     /// <summary>
@@ -175,7 +184,100 @@ internal static class SkillInstaller
         var content = LoadEmbeddedResource($"skills/{folder}/SKILL.md");
         if (content == null)
             throw new ArgumentException($"Embedded SKILL.md not found for '{skillName}'");
-        return StripSetupSection(content);
+        // A SKILL.md is an entry point that defers detail to bundled reference
+        // files (reference/*.md, helper scripts, style libraries). Append a
+        // manifest so a text-channel caller (MCP / CLI, no skill install) knows
+        // those files exist and how to fetch them — otherwise every
+        // "see reference/foo" pointer in the body is a dead link.
+        return StripSetupSection(content) + BuildReferenceManifest(skillName);
+    }
+
+    /// <summary>
+    /// Relative paths of every embedded file for a skill except SKILL.md,
+    /// sorted. Uses resource names only (no content read) so binary assets are
+    /// listed without being mangled.
+    /// </summary>
+    public static IReadOnlyList<string> ListSkillFiles(string skillName)
+    {
+        if (!SkillMap.TryGetValue(skillName, out var folder))
+            throw new ArgumentException($"Unknown skill: {skillName}. Available: {KnownSkillsList()}");
+        var prefix = $"skills/{folder}/";
+        return Assembly.GetExecutingAssembly().GetManifestResourceNames()
+            .Where(n => n.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Select(n => n[prefix.Length..])
+            .Where(rel => !rel.Equals("SKILL.md", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(rel => rel, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Return the text content of one bundled reference file inside a skill
+    /// (e.g. "reference/decision-rules.md"). Shared by the CLI
+    /// `load_skill &lt;name&gt; --path &lt;rel&gt;` command and the MCP
+    /// `load_skill` tool's path= argument. Throws on unknown skill, path
+    /// traversal, a binary asset (cannot ride the text channel), or a missing
+    /// file.
+    /// </summary>
+    public static string LoadSkillFile(string skillName, string relativePath)
+    {
+        if (!SkillMap.TryGetValue(skillName, out var folder))
+            throw new ArgumentException($"Unknown skill: {skillName}. Available: {KnownSkillsList()}");
+        var rel = (relativePath ?? "").Replace('\\', '/').TrimStart('/');
+        if (rel.Length == 0)
+            throw new ArgumentException("path is empty — pass a relative skill file, e.g. reference/decision-rules.md");
+        // Contain to the skill folder: reject traversal and current-dir segments.
+        if (rel.Split('/').Any(seg => seg is ".." or "."))
+            throw new ArgumentException($"Invalid skill file path: {relativePath}");
+        if (BinarySkillExtensions.Contains(Path.GetExtension(rel)))
+            throw new ArgumentException(
+                $"'{rel}' is a binary asset and cannot be served over the text channel. " +
+                $"Install the skill to get it on disk: officecli skills install {skillName}");
+        var content = LoadEmbeddedResource($"skills/{folder}/{rel}");
+        if (content == null)
+            throw new ArgumentException(
+                $"Skill file not found: {rel}. List available files via the manifest at the end of: " +
+                $"officecli load_skill {skillName}");
+        return content;
+    }
+
+    /// <summary>
+    /// Build the "Reference files" manifest appended to a SKILL.md. Deep trees
+    /// (≥ 3 path segments, e.g. a 52-directory style library) collapse to one
+    /// line per second-level directory so the manifest stays compact; shallow
+    /// files (reference/foo.md) are listed individually. Empty string when the
+    /// skill bundles nothing beyond SKILL.md.
+    /// </summary>
+    private static string BuildReferenceManifest(string skillName)
+    {
+        var files = ListSkillFiles(skillName);
+        if (files.Count == 0) return "";
+        var shallow = new List<string>();
+        var deepGroups = new SortedDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var f in files)
+        {
+            var segs = f.Split('/');
+            // List shallow files, plus any INDEX.md at any depth — an INDEX is
+            // the documented entry into a collapsed tree (e.g. the style
+            // library), so the agent shouldn't have to guess its path.
+            if (segs.Length <= 2 || segs[^1].Equals("INDEX.md", StringComparison.OrdinalIgnoreCase))
+                shallow.Add(f);
+            else
+            {
+                var key = segs[0] + "/" + segs[1] + "/";
+                deepGroups[key] = deepGroups.GetValueOrDefault(key) + 1;
+            }
+        }
+        var sb = new StringBuilder();
+        sb.Append("\n\n## Reference files (bundled with this skill)\n\n");
+        sb.Append("This skill defers detail to the files below. The body's `reference/…` ");
+        sb.Append("pointers refer to these. Fetch one with:\n");
+        sb.Append($"- MCP:  `load_skill name={skillName} path=<relpath>`\n");
+        sb.Append($"- CLI:  `officecli load_skill {skillName} --path <relpath>`\n");
+        sb.Append($"- or install the whole tree to disk: `officecli skills install {skillName}`\n\n");
+        foreach (var f in shallow) sb.Append($"- `{f}`\n");
+        foreach (var (g, n) in deepGroups)
+            sb.Append($"- `{g}` — {n} files (binary assets need `skills install`; browse an `INDEX.md` here if present)\n");
+        return sb.ToString();
     }
 
     /// <summary>
