@@ -695,9 +695,25 @@ public static class McpServer
                 var commands = Arg("commands");
                 var forceStr = Arg("force");
                 var stopOnError = !string.Equals(forceStr, "true", StringComparison.OrdinalIgnoreCase);
-                var items = JsonSerializer.Deserialize<List<BatchItem>>(commands, BatchJsonContext.Default.ListBatchItem);
+                // Validate the commands payload before deserializing: an empty or
+                // missing 'commands' otherwise surfaces the raw System.Text.Json
+                // "input does not contain any JSON tokens" exception, which gives
+                // a caller no idea what to fix. The common mistake is putting the
+                // array under the wrong key (e.g. 'batch') so 'commands' is empty.
+                if (string.IsNullOrWhiteSpace(commands))
+                    throw new ArgumentException(
+                        "batch requires a 'commands' field: a JSON array (as a string) of command objects, "
+                        + "e.g. commands=\"[{\\\"command\\\":\\\"add\\\",\\\"parent\\\":\\\"/body\\\",\\\"type\\\":\\\"paragraph\\\",\\\"props\\\":[\\\"text=Hi\\\"]}]\". "
+                        + "Put the array under 'commands' (not under 'batch' or any other key).");
+                List<BatchItem>? items;
+                try { items = JsonSerializer.Deserialize<List<BatchItem>>(commands, BatchJsonContext.Default.ListBatchItem); }
+                catch (JsonException jx)
+                {
+                    throw new ArgumentException($"'commands' is not a valid JSON array: {jx.Message} "
+                        + "It must look like [{\"command\":\"add\", \"parent\":\"/body\", \"type\":\"paragraph\"}].");
+                }
                 if (items == null || items.Count == 0)
-                    throw new ArgumentException("No commands found in input.");
+                    throw new ArgumentException("'commands' is an empty array — provide at least one command object.");
                 using var handler = DocumentHandlerFactory.Open(file, editable: true);
                 // Protection gate against the just-opened in-memory DOM, mirroring
                 // the CLI and resident batch paths: a protected .docx rejects
