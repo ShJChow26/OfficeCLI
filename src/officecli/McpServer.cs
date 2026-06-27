@@ -510,6 +510,7 @@ public static class McpServer
     // from schemas/help/*.json — it's about how to use the *tool*, not what the
     // *document model* exposes.
     private const string McpHelpStrategy = @"## Strategy
+Lifecycle: create <file> (new) or open <file> (existing) -> edit -> `close <file>` when done. Make closing a habit — finish every file you touched with a close. Edits are written to disk as they run, so close is always safe and simply confirms the file is saved (it never errors or loses work, whether or not a background session was active).
 Use view (outline/stats/issues/annotated) to understand the document first, then get/query to inspect details, then set/add/remove to modify.
 View modes: text, annotated, outline, stats, issues, html, svg (pptx only), screenshot, forms (docx only).
 Before delivering, pass the delivery gate (see the tool description): validate clean, view issues clean, then a visual audit via view mode=screenshot when layout matters (slide decks most of all). Whether the visual audit is mandatory is format-specific — run `load_skill <pptx|word|excel>` for the authoritative per-format gate.
@@ -529,7 +530,8 @@ Paths are 1-based: /slide[1]/shape[2], /body/p[3], /Sheet1/A1. Props are key=val
 Delivery gate (before reporting a document finished — any failure = fix and re-check, do NOT deliver; validate passing is NOT delivery, 'looks like a real document' is):
 1. Schema: `validate <file>` -> clean, no errors.
 2. Content: `view <file> issues` -> no overflow/format/structure issues; and scan `view <file> text` for leftover placeholders (xxxx, lorem/ipsum, <TODO>, {{...}}, $VAR$, empty ()/[]).
-3. Visual audit: `view <file> screenshot --page N` renders the page/slide and returns it as an image shown to you (or --grid auto for a whole-doc contact sheet). Judge it adversarially (assume problems exist) for overlap, text overflow, off-slide shapes, dark-on-dark, misalignment; fix positions/sizes (`set <file> <path> --prop x=.. --prop y=..`) and re-screenshot until right; if the screenshot can't render, say 'not visually verified'. Whether this audit is mandatory is format-specific (slide decks need it most — absolute-positioned shapes overlap invisibly to text modes), so run `load_skill pptx` (or word / excel) for the authoritative gate. The per-format SKILL.md, not this blurb, is the source of truth for what 'done' requires.";
+3. Visual audit: `view <file> screenshot --page N` renders the page/slide and returns it as an image shown to you (or --grid auto for a whole-doc contact sheet). Judge it adversarially (assume problems exist) for overlap, text overflow, off-slide shapes, dark-on-dark, misalignment; fix positions/sizes (`set <file> <path> --prop x=.. --prop y=..`) and re-screenshot until right; if the screenshot can't render, say 'not visually verified'. Whether this audit is mandatory is format-specific (slide decks need it most — absolute-positioned shapes overlap invisibly to text modes), so run `load_skill pptx` (or word / excel) for the authoritative gate. The per-format SKILL.md, not this blurb, is the source of truth for what 'done' requires.
+4. Close: as the LAST step, run `close <file>`. Do this for every file you worked on before reporting done — close is always safe (it never errors or loses work; edits already saved as they ran) and is the clean end of the session.";
 
     private static void WriteToolDefinitions(Utf8JsonWriter w)
     {

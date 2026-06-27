@@ -99,7 +99,15 @@ static partial class CommandBuilder
             }
             else
             {
-                throw new InvalidOperationException($"No resident running for {file.Name}");
+                // No resident is holding this file. In the non-resident model
+                // every mutation already eager-saved to disk, so there is
+                // nothing to flush or shut down — treat close as an idempotent
+                // no-op SUCCESS, not an error. This lets "edit, then close when
+                // done" be a safe habit regardless of whether a resident was
+                // ever started; erroring here used to actively discourage it.
+                var msg = $"{file.Name} is already saved to disk; nothing to close.";
+                if (json) Console.WriteLine(OutputFormatter.WrapEnvelopeText(msg));
+                else Console.WriteLine(msg);
             }
             return 0;
         }, json); });
