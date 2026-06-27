@@ -850,7 +850,17 @@ static partial class CommandBuilder
                         "Batch item missing required 'command' field. " +
                         "Valid commands: get, query, set, add, remove, move, view, raw, validate. " +
                         "Example: {\"command\": \"set\", \"path\": \"/Sheet1/A1\", \"props\": {\"value\": \"hello\"}}");
-                throw new InvalidOperationException($"Unknown command: '{item.Command}'. Valid commands: get, query, set, add, remove, move, swap, view, raw, validate.");
+                // A "command" containing whitespace is almost always a whole CLI
+                // line stuffed into the verb field (e.g. "add /slide[1] --type
+                // shape --prop ...") — the single most common batch-item mistake.
+                // Diagnose it specifically and point at the item schema; a plain
+                // unknown verb just gets the schema pointer.
+                var batchHint = item.Command.Any(char.IsWhiteSpace)
+                    ? " — that looks like a whole CLI line placed in \"command\". Use the bare verb only and put the"
+                      + " rest in sibling fields, e.g. {\"command\":\"add\",\"parent\":\"/slide[1]\",\"type\":\"shape\","
+                      + "\"props\":{...}}. Run `help batch` for the item schema."
+                    : " Run `help batch` for the JSON item schema.";
+                throw new InvalidOperationException($"Unknown command: '{item.Command}'. Valid commands: get, query, set, add, remove, move, swap, view, raw, validate.{batchHint}");
         }
     }
 

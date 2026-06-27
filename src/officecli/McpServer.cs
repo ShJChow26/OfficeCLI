@@ -419,15 +419,21 @@ public static class McpServer
 
     /// <summary>
     /// Parse+invoke argv through the shared CLI root, capturing stdout AND
-    /// stderr and the exit code. Parse/validation failures (the free win — same
-    /// messages the CLI gives) throw before any handler runs. argv is the CLI
-    /// token vector, e.g. ["get", file, "/body", "--depth", "1", "--json"].
+    /// stderr and the exit code. argv is the CLI token vector, e.g.
+    /// ["get", file, "/body", "--depth", "1", "--json"].
+    ///
+    /// Parse/validation failures are NOT short-circuited here. Letting Invoke
+    /// run renders the SAME error + usage block a terminal user sees
+    /// (System.CommandLine writes it to the captured stream and returns a
+    /// non-zero exit WITHOUT running the handler), so the agent receives the
+    /// full message — including the option list that points it at the right
+    /// flag (e.g. batch's --commands/--input) — instead of a terse, usage-
+    /// stripped one-liner. Surfacing only `pr.Errors` here used to drop that
+    /// usage block, making MCP less informative than the bare CLI.
     /// </summary>
     private static CliResult RunCliRaw(string[] argv)
     {
         var pr = RootCommand.Parse(argv);
-        if (pr.Errors.Count > 0)
-            throw new ArgumentException(string.Join("; ", pr.Errors.Select(e => e.Message)));
         var prevOut = Console.Out;
         var prevErr = Console.Error;
         var so = new System.IO.StringWriter();

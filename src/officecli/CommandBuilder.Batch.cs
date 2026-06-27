@@ -9,6 +9,27 @@ namespace OfficeCli;
 
 static partial class CommandBuilder
 {
+    // Shown as the `batch` command's help/description. The flags alone don't
+    // tell a caller (or an agent) what each JSON array ITEM looks like — the
+    // single most common batch mistake is stuffing a whole CLI line into
+    // "command" (e.g. {"command":"add /slide[1] --type shape --prop ..."}),
+    // which fails with "Unknown command". Document the per-item shape and a
+    // concrete example here so `help batch` actually teaches it.
+    private const string BatchHelpDescription =
+        "Execute multiple commands from a JSON array (one open/save cycle).\n\n"
+        + "Each array item is an OBJECT whose \"command\" is the bare verb "
+        + "(add/set/remove/move/swap/get/query/...); the verb's arguments are SIBLING fields, "
+        + "not a CLI string inside \"command\". Common fields: \"parent\" (add target), "
+        + "\"path\" (set/remove/get target), \"type\" (element type for add), "
+        + "\"props\" (a key->value map of --prop values), \"to\"/\"after\"/\"before\" (move), "
+        + "\"path2\" (swap's second path).\n\n"
+        + "Pass the array via --commands, or as the same JSON on stdin / --input <file>. Example:\n"
+        + "[\n"
+        + "  {\"command\":\"add\",\"parent\":\"/slide[1]\",\"type\":\"shape\",\"props\":{\"text\":\"Hi\",\"x\":\"1cm\",\"y\":\"2cm\"}},\n"
+        + "  {\"command\":\"set\",\"path\":\"/slide[1]/shape[1]\",\"props\":{\"bold\":\"true\"}},\n"
+        + "  {\"command\":\"remove\",\"path\":\"/slide[2]/shape[3]\"}\n"
+        + "]";
+
     /// <summary>
     /// Apply a batch of commands against an already-open handler. This is the
     /// single shared replay loop behind all three batch surfaces — the
@@ -89,7 +110,7 @@ static partial class CommandBuilder
         // strict abort-on-first-failure flow for callers who depend on it.
         var batchForceOpt = new Option<bool>("--force") { Description = "Deprecated alias for the default continue-on-error mode (kept for compatibility)" };
         var batchStopOpt = new Option<bool>("--stop-on-error") { Description = "Abort the batch as soon as any command fails (default: continue and report per-item errors)" };
-        var batchCommand = new Command("batch", "Execute multiple commands from a JSON array (one open/save cycle)");
+        var batchCommand = new Command("batch", BatchHelpDescription);
         batchCommand.Add(batchFileArg);
         batchCommand.Add(batchInputOpt);
         batchCommand.Add(batchCommandsOpt);
