@@ -113,7 +113,7 @@ Any hardcoded number without a source is an undocumented assumption — a review
 
 Six steps. Every non-trivial build follows this shape.
 
-1. **Choose the mode.** Always use `officecli open <file>` at the start and `officecli close <file>` at the end. Resident mode is the default, not an optimization — it avoids re-parsing the file on every command. For many cells, use `batch`: **≤ 50 ops/block recommended; tested up to 80+ ops per block on pure value-set payloads with zero failures. Cross-sheet formula batches are the exception — run those non-resident, single heredoc (see Known Issues)**.
+1. **Open/close lifecycle.** Use `officecli open <file>` at the start and `officecli close <file>` at the end — keeps the file in memory between commands and ensures a clean finish. Close when done; it's always safe (closing never errors or loses work). For many cells, use `batch`: **≤ 50 ops/block recommended; tested up to 80+ ops per block on pure value-set payloads with zero failures. Cross-sheet formula batches are the exception — run those non-resident, single heredoc (see Known Issues)**.
 2. **Create or load.** `officecli create "$FILE"` (new) or `officecli view "$FILE" outline` (existing — get the lay of the land first).
 3. **Build incrementally.** One command, read the output, continue. After any structural op (new sheet, chart, named range, pivot), run `get` on it to confirm shape before stacking more on top.
 4. **Format.** Column widths, number formats, freeze panes, tab colors, header fills. Formatting is not optional polish — per "Requirements for Outputs" it is part of the deliverable.

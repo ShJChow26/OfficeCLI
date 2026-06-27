@@ -43,7 +43,7 @@ If in doubt, `view text` after writing and compare character-for-character.
 
 **Incremental execution.** `officecli` mutates the file on every call. Run commands one at a time and check each exit code — a 50-command script that fails at command 3 cascades silently. After any structural op (new style, table, TOC, section break) run `get` on it before stacking more.
 
-**Resident mode is the default**, not an optimization: `officecli open <file>` at the start, `officecli close <file>` at the end — it avoids re-parsing the XML every call. For many paragraphs of one style, use `batch` (one open/save cycle for the whole array).
+**Open/close lifecycle:** `officecli open <file>` at the start, `officecli close <file>` at the end — keeps the doc in memory between commands and ensures a clean finish. Close when done; it's always safe (closing never errors or loses work). For many paragraphs of one style, use `batch` (one open/save cycle for the whole array).
 
 **`$FILE` convention.** All commands use `"$FILE"` — set it once (`FILE="your-doc.docx"`). Never copy a literal `doc.docx` / `review.docx` into output — always substitute your actual target.
 
