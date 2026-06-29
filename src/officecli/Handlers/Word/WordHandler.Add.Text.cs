@@ -1769,6 +1769,21 @@ public partial class WordHandler
                 // verbatim math; the comment survives through its AddComment anchor
                 // (its end lands at the run boundary adjacent to the equation).
                 omml = StripVerbatimCommentMarkers(omml);
+                // BUG-DUMP-OLE-IN-OMATH: a MathType / Equation.DSMT4 OLE object
+                // embedded inside the verbatim math references its binary payload
+                // (<o:OLEObject r:id>) and preview image (<v:imagedata r:id>) by
+                // relationship id. The equation emit base64-inlines those parts as
+                // part{N}.* (mirroring the activex / vmlshape carriers); without
+                // recreating them here the r:ids dangle on replay — a silent
+                // embedding loss plus a validator NullReferenceException. Recreate
+                // the parts on the host part and rewrite the math's r:ids to the
+                // freshly assigned ones. Only the verbatim-xml path carries these.
+                if (properties.ContainsKey("part1.relId"))
+                {
+                    var oleHostPart = ResolveImageHostPart(parent);
+                    var rewriteOleIds = MaterializeInlinedParts(oleHostPart, properties, "equation");
+                    omml = rewriteOleIds(omml);
+                }
                 try
                 {
                     // Root is <m:oMath> → construct directly; root is <m:oMathPara>

@@ -53,7 +53,7 @@ public static partial class WordBatchEmitter
     {
         var pNode = word.Get(sourcePath);
 
-        if (TryEmitDisplayEquation(pNode, parentPath, autoPresent, items)) return;
+        if (TryEmitDisplayEquation(word, pNode, parentPath, autoPresent, items)) return;
 
         // Track source paraId -> target index BEFORE any early-return path
         // (section break, TOC, …). Comments anchored on a section-break or
@@ -624,7 +624,7 @@ public static partial class WordBatchEmitter
 
     // ── Extracted helpers (behavior unchanged from inline original) ──
 
-    private static bool TryEmitDisplayEquation(DocumentNode pNode, string parentPath, bool autoPresent, List<BatchItem> items)
+    private static bool TryEmitDisplayEquation(WordHandler word, DocumentNode pNode, string parentPath, bool autoPresent, List<BatchItem> items)
     {
         // Display-mode equations (<m:oMathPara>) surface in EmitBody's
         // bodyNode.Children as type=paragraph, but a direct Get on the
@@ -647,6 +647,9 @@ public static partial class WordBatchEmitter
             && eqXml != null && eqXml.ToString() is { Length: > 0 } eqXmlS
             && eqXmlS.Contains("oMath", StringComparison.Ordinal))
             eqProps["xml"] = eqXmlS;
+        // Carry any OLE/preview-image parts referenced inside the verbatim math
+        // (MathType/Equation objects) so they don't dangle on replay.
+        AddMathInlinedPartProps(word, pNode.Path, eqProps);
         // BUG-DUMP19-02: forward block-equation alignment.
         if (pNode.Format.TryGetValue("align", out var eqAlign)
             && eqAlign != null && !string.IsNullOrEmpty(eqAlign.ToString()))
@@ -2016,6 +2019,9 @@ public static partial class WordBatchEmitter
         var eqXml = run.Format.TryGetValue("_omathXml", out var exv) ? exv?.ToString() : null;
         if (!string.IsNullOrEmpty(eqXml) && eqXml.Contains("oMath", StringComparison.Ordinal))
             eqProps["xml"] = eqXml;
+        // Carry any OLE/preview-image parts referenced inside the verbatim math
+        // (MathType/Equation objects) so they don't dangle on replay.
+        AddMathInlinedPartProps(word, run.Path, eqProps);
         var eqParent = paraTargetPath;
         if (!string.IsNullOrEmpty(run.Path))
         {
@@ -4106,6 +4112,29 @@ public static partial class WordBatchEmitter
     // Shared prop packing for the inlined-parts carriers (`add activex`,
     // `add diagram`): verbatim run XML + one part{N}.relId/part{N}.data pair
     // per referenced package part, with part{N}.child{M}.* for nested parts.
+    // BUG-DUMP-OLE-IN-OMATH: a MathType / Equation OLE object embedded inside the
+    // verbatim <m:oMath> carrier references its binary (<o:OLEObject r:id>) and
+    // preview image (<v:imagedata r:id>) by relationship id. The `xml` carrier
+    // ships those refs but not the parts, so they dangle on replay (a silent
+    // embedding loss plus a validator NullReferenceException). Base64-inline the
+    // referenced parts as part{N}.* (the same carrier shape as activex/vmlshape)
+    // so AddEquation rematerializes them and rewrites the r:ids. No-op when the
+    // math carries no verbatim xml or references no parts (the common case), so
+    // the interactive `add equation formula=` path is untouched.
+    private static void AddMathInlinedPartProps(WordHandler word, string? mathPath, Dictionary<string, string> eqProps)
+    {
+        if (string.IsNullOrEmpty(mathPath)
+            || !eqProps.TryGetValue("xml", out var xml)
+            || string.IsNullOrEmpty(xml)
+            || !xml.Contains(":id=\"", StringComparison.Ordinal))
+            return;
+        var inlined = word.GetMathInlinedPartsEmitData(mathPath);
+        if (inlined == null) return;
+        foreach (var kv in PackInlinedPartsProps(inlined))
+            if (!string.Equals(kv.Key, "runXml", StringComparison.Ordinal))
+                eqProps[kv.Key] = kv.Value;
+    }
+
     private static Dictionary<string, string> PackInlinedPartsProps(WordHandler.ActiveXEmitData data)
     {
         var props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
