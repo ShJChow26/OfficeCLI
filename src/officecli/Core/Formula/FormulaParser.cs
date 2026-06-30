@@ -2986,6 +2986,7 @@ internal static class FormulaParser
         "sup", "inf", "det", "gcd", "dim", "ker", "hom", "deg",
         "arg", "sec", "csc", "cot", "sinh", "cosh", "tanh",
         "coth", "sech", "csch",
+        "arcsin", "arccos", "arctan", "arccot", "arcsec", "arccsc",
         "limsup", "liminf", "Pr", "argmax", "argmin"
     };
 
