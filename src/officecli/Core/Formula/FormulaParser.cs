@@ -1326,8 +1326,48 @@ internal static class FormulaParser
                         ?? matrixEl.Descendants<M.Matrix>().FirstOrDefault();
                     if (rowsMatrix == null)
                         return matrixEl;
+
+                    // Multiple alignment points (>1 "&" in some row, i.e. >2 cells)
+                    // cannot be represented by m:eqArr, which models only a vertical
+                    // stack with a single alignment point. LaTeX align lays out
+                    // alternating right/left columns (a &= b & c &= d → r l r l), so
+                    // route these to a borderless matrix with alternating m:mcJc
+                    // justification. This reverses to \begin{array}{rlrl…} (the m:m
+                    // colSpec path), which renders identically — a canonical-
+                    // equivalent collapse, like \cfrac→\frac. Single-/no-alignment
+                    // rows keep the eqArr path unchanged (no regression).
+                    var matRows = rowsMatrix.Elements<M.MatrixRow>().ToList();
+                    var maxCells = matRows.Count == 0 ? 0 : matRows.Max(r => r.Elements<M.Base>().Count());
+                    if (maxCells > 2)
+                    {
+                        // Pad short rows to equal column count with empty cells.
+                        foreach (var mr in matRows)
+                        {
+                            var have = mr.Elements<M.Base>().Count();
+                            for (var k = have; k < maxCells; k++)
+                                mr.AppendChild(new M.Base(MakeMathRun("")));
+                        }
+                        // Alternating right/left column justification (col 0 = right).
+                        var mPr = rowsMatrix.GetFirstChild<M.MatrixProperties>()
+                            ?? rowsMatrix.PrependChild(new M.MatrixProperties());
+                        var mcs = new M.MatrixColumns();
+                        for (var ci = 0; ci < maxCells; ci++)
+                            mcs.AppendChild(new M.MatrixColumn(
+                                new M.MatrixColumnProperties(
+                                    new M.MatrixColumnCount { Val = 1 },
+                                    new M.MatrixColumnJustification
+                                    {
+                                        Val = ci % 2 == 0
+                                            ? M.HorizontalAlignmentValues.Right
+                                            : M.HorizontalAlignmentValues.Left
+                                    })));
+                        mPr.AppendChild(mcs);
+                        rowsMatrix.Remove();
+                        return rowsMatrix;
+                    }
+
                     var eqArr = new M.EquationArray();
-                    foreach (var mr in rowsMatrix.Elements<M.MatrixRow>())
+                    foreach (var mr in matRows)
                     {
                         var rowBase = new M.Base();
                         foreach (var cell in mr.Elements<M.Base>())
