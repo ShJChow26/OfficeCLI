@@ -1753,7 +1753,17 @@ public partial class WordHandler
         if (!properties.TryGetValue("formula", out var formula) && !properties.TryGetValue("text", out formula))
             throw new ArgumentException("'formula' (or 'text') property is required for equation type");
 
-        var mode = properties.GetValueOrDefault("mode", "display");
+        // R2-fuzz-3: validate `mode` like Set does. Accept inline/display
+        // case-insensitively (mode=INLINE works); any other value is reported
+        // as unsupported (warning + exit 2) instead of silently defaulting to
+        // display. CONSISTENCY: mirrors SetElementMPara/SetElementOMath's
+        // "mode (valid: inline, display)" rejection.
+        var mode = properties.GetValueOrDefault("mode", "display").ToLowerInvariant();
+        if (properties.ContainsKey("mode") && mode is not ("inline" or "display"))
+        {
+            LastAddUnsupportedProps.Add("mode (valid: inline, display)");
+            mode = "display"; // fall back so the equation is still written
+        }
 
         // BUG-DUMP-EQVERBATIM: prefer the verbatim <m:oMath> the dump captured
         // (xml prop) over the LaTeX `formula` string. The formula string is lossy
