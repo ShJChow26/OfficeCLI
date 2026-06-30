@@ -464,11 +464,18 @@ public partial class WordHandler
                 $"Cannot add '{type}' under {parentPath}: numbering definitions belong under /numbering.");
         }
 
-        // /numbering only accepts numbering definitions (num, abstractNum). Reject everything else
-        // so a stray --type p doesn't corrupt numbering.xml.
+        // /numbering only accepts numbering definitions. Reject stray curated
+        // types (a typo'd --type p) so they can't corrupt numbering.xml. A
+        // namespace-prefixed type (e.g. w:abstractNum, w:num, w:numPicBullet) is
+        // an explicit generic-add request — the dump→batch recursive emitter
+        // rebuilds the whole subtree this way, bypassing the curated
+        // abstractNum/num seeding (which auto-fills 9 default levels). Let those
+        // through to AddDefault, mirroring how /styles children (w:pPr, w:rPr,
+        // w:tblStylePr, …) reach the generic path. CONSISTENCY(numbering-typed-decomp).
         if (parent is Numbering)
         {
-            if (t != "num" && t != "abstractnum")
+            bool prefixedGeneric = type.Contains(':');
+            if (t != "num" && t != "abstractnum" && !prefixedGeneric)
                 throw new ArgumentException(
                     $"Cannot add '{type}' under /numbering. /numbering only holds numbering definitions — use --type num (with --prop abstractNumId=N) or --type abstractNum.");
         }

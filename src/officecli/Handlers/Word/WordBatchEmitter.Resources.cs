@@ -885,16 +885,25 @@ public static partial class WordBatchEmitter
     }
 
     private static void EmitNumberingRaw(WordHandler word, List<BatchItem> items)
-        => EmitNumberingRaw(word, items, null);
+        => EmitNumberingRaw(word, items, null, RecursiveNumberingDecomp);
 
     private static void EmitNumberingRaw(WordHandler word, List<BatchItem> items, List<DocxUnsupportedWarning>? warnings)
+        => EmitNumberingRaw(word, items, warnings, RecursiveNumberingDecomp);
+
+    private static void EmitNumberingRaw(WordHandler word, List<BatchItem> items, List<DocxUnsupportedWarning>? warnings, bool recursiveDecomp)
     {
         // Numbering models list templates (abstractNum + num pairs, each
         // abstractNum holds 9 levels with their own pPr / numFmt / lvlText).
-        // Reconstructing this through typed Add would mean another emitter
-        // in itself; for v0.5 we ship the entire <w:numbering> XML wholesale
-        // via raw-set. The blank document creates an empty numbering part,
-        // so a single replace on the part root is sufficient.
+        // RECURSIVE-NUMBERING-DECOMP (default ON): decompose the whole
+        // <w:numbering> subtree into typed `add` ops — one `add w:abstractNum` /
+        // `add w:num` per definition, recursing into every child (multiLevelType,
+        // lvl, start, numFmt, lvlText, pPr, rPr, abstractNumId, lvlOverride, …)
+        // via the generic prefixed-add path (the same machinery that decomposes
+        // styles). Falls back to the verbatim raw-set replace below on ANY
+        // residue (picture bullets carry a VML r:id; external rels / unknown
+        // namespaces) — that path already round-trips the pic-bullet binaries.
+        // The blank document creates an empty numbering part, so a single
+        // replace on the part root is sufficient for the fallback.
         string xml;
         try { xml = word.Raw("/numbering"); }
         catch { return; }
@@ -903,6 +912,16 @@ public static partial class WordBatchEmitter
         // Skip when numbering is empty (just `<w:numbering/>` with no children).
         if (!xml.Contains("<w:abstractNum") && !xml.Contains("<w:num "))
             return;
+
+        if (recursiveDecomp)
+        {
+            var typedOps = TryDecomposeNumbering(xml);
+            if (typedOps != null)
+            {
+                items.AddRange(typedOps);
+                return;
+            }
+        }
         // BUG-DUMP-R45-2: round-trip the picture-bullet image binaries (word/media/*)
         // so the <w:numPicBullet> definition + its <v:imagedata r:id> + each level's
         // <w:lvlPicBulletId> opt-in can STAY. Read the NumberingDefinitionsPart's
@@ -3592,6 +3611,15 @@ public static partial class WordBatchEmitter
     internal static bool RecursiveStyleDecomp =
         Environment.GetEnvironmentVariable("OFFICECLI_RECURSIVE_STYLE_DECOMP") != "0";
 
+    // RECURSIVE-NUMBERING-DECOMP: emit the <w:numbering> part as typed `add`
+    // ops (one `add w:abstractNum`/`add w:num` per definition + recursive
+    // children) instead of a verbatim raw-set replace. ON by default; set
+    // OFFICECLI_RECURSIVE_NUMBERING_DECOMP=0 to fall back to the legacy
+    // whole-part raw-set path. Settable (internal) so tests can pin the path
+    // deterministically without depending on process-env / static-init timing.
+    internal static bool RecursiveNumberingDecomp =
+        Environment.GetEnvironmentVariable("OFFICECLI_RECURSIVE_NUMBERING_DECOMP") != "0";
+
     // Well-known OOXML namespace → canonical prefix, the inverse of the add
     // path's CommonNamespaces. A namespace absent here is treated as residue
     // (the generic add can't resolve an unknown prefix), so the caller raw-sets.
@@ -3602,6 +3630,17 @@ public static partial class WordBatchEmitter
         ["http://schemas.openxmlformats.org/drawingml/2006/main"] = "a",
         ["http://schemas.openxmlformats.org/markup-compatibility/2006"] = "mc",
         ["http://schemas.openxmlformats.org/officeDocument/2006/math"] = "m",
+        // NOTE: Office Word extension wordml namespaces (w14/w15/w16cid/…) are
+        // deliberately NOT listed here. They appear in real numbering/styles as
+        // attributes (w15:restartNumberingAfterBreak on w:abstractNum, w14:paraId,
+        // …) — but the strict OOXML validator REQUIRES those extension attributes
+        // to be covered by the part-root's mc:Ignorable, which the typed
+        // child-add path does not reproduce (it only attaches children to the
+        // blank's root). Emitting them as typed props therefore yields a
+        // schema-INVALID part. Until part-root mc:Ignorable round-trips, an
+        // element carrying an extension attribute is treated as residue, so the
+        // whole part falls back to the verbatim raw-set (which keeps mc:Ignorable
+        // and validates). See TryDecomposeNumbering.
     };
 
     private const int StyleDecompMaxDepth = 40;
@@ -3634,6 +3673,45 @@ public static partial class WordBatchEmitter
                 return null;
         }
         return ops;
+    }
+
+    // Decompose a verbatim <w:numbering> element into typed `add` ops: one
+    // `add w:abstractNum` / `add w:num` (/ `add w:numIdMacAtCleanup`) per direct
+    // child, each recursing into its full subtree via TryEmitElementAdd. No
+    // shell step is needed — unlike <w:style> (whose <w:name> identity child is
+    // created by the curated `add style`), an abstractNum/num is fully described
+    // by its attributes + children, so the generic prefixed-add path rebuilds it
+    // verbatim. Children replay in source order; the cardinality-aware generic
+    // add keeps abstractNum* before num* (first num has no num sibling → AddChild
+    // places it in CT_Numbering schema order). Returns null on any residue (a
+    // picture-bullet numPicBullet carries a VML r:id; unknown namespaces) — the
+    // caller then ships the whole part verbatim via raw-set.
+    //
+    // Root attributes (mc:Ignorable, extra xmlns) on <w:numbering> are NOT
+    // reproduced — the children attach to the blank's existing root. This is
+    // vestigial-safe by construction: a prefix listed in mc:Ignorable that is
+    // actually USED (a w14:/wp14: element or attribute) would make
+    // TryEmitElementAdd return false → whole-part raw-set fallback (which keeps
+    // mc:Ignorable). So whenever this typed path SUCCEEDS, mc:Ignorable lists
+    // only unused prefixes and its loss changes nothing — same class as the
+    // SDK's w:left→w:start / xmlns canonicalization the dump already accepts.
+    private static List<BatchItem>? TryDecomposeNumbering(string numberingXml)
+    {
+        if (string.IsNullOrEmpty(numberingXml) || !numberingXml.StartsWith("<")) return null;
+        System.Xml.Linq.XElement numEl;
+        try { numEl = System.Xml.Linq.XElement.Parse(numberingXml); }
+        catch { return null; }
+        var ops = new List<BatchItem>();
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var child in numEl.Elements())
+        {
+            counts.TryGetValue(child.Name.LocalName, out var c);
+            counts[child.Name.LocalName] = c + 1;
+            var childPath = $"/numbering/{child.Name.LocalName}[{c + 1}]";
+            if (!TryEmitElementAdd(child, "/numbering", childPath, ops, 0))
+                return null;
+        }
+        return ops.Count > 0 ? ops : null;
     }
 
     // Emit `add <localName> parent=<parentPath>` for el (attributes as

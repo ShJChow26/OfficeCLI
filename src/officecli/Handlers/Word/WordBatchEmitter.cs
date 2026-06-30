@@ -180,7 +180,7 @@ public static partial class WordBatchEmitter
     /// tests can exercise the path without mutating shared static state under
     /// xUnit's parallel test execution.</param>
     public static (List<BatchItem> Items, List<DocxUnsupportedWarning> Warnings) EmitWordWithWarnings(
-        WordHandler word, bool? recursiveStyleDecomp = null)
+        WordHandler word, bool? recursiveStyleDecomp = null, bool? recursiveNumberingDecomp = null)
     {
         var items = new List<BatchItem>();
         var warnings = new List<DocxUnsupportedWarning>();
@@ -190,7 +190,7 @@ public static partial class WordBatchEmitter
         // Numbering must come BEFORE styles — list-style definitions
         // (Heading paragraphs with numPr) reference numId values, so style
         // adds that carry `numId=N` need /numbering to already hold N.
-        EmitNumberingRaw(word, items, warnings);
+        EmitNumberingRaw(word, items, warnings, recursiveNumberingDecomp ?? RecursiveNumberingDecomp);
         EmitStyles(word, items, recursiveStyleDecomp ?? RecursiveStyleDecomp);
         // docDefaults (inside styles.xml) round-trips verbatim via raw-set —
         // must follow EmitStyles so it overwrites the blank's stamped block
