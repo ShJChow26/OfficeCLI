@@ -1630,9 +1630,20 @@ public partial class WordHandler
         if (matchCount > 0)
             return $"Available at {parentPath}: {requestedType}[1]..{requestedType}[{matchCount}]";
 
-        // List distinct child types at this level
+        // List distinct child types at this level. R2-bt-1: a display equation
+        // is a w:p wrapping a single m:oMathPara. The path resolver (rule #6 in
+        // ResolvePath / WalkBodyChild) does NOT count such wrapper paragraphs
+        // under /body/p[N] — they are addressed as /body/oMathPara[N] instead.
+        // The raw LocalName grouping below counted the wrapper w:p as p(1),
+        // producing the self-contradictory "No p found … Available children:
+        // p(1)" message: the listing claimed a p the resolver refuses to index.
+        // Reclassify wrapper paragraphs as oMathPara here so the listing agrees
+        // with what /body/p[N] and /body/oMathPara[N] actually resolve.
+        bool atBody = parent is Body;
         var childTypes = parent.ChildElements
-            .GroupBy(c => c.LocalName)
+            .GroupBy(c => atBody && c is Paragraph wp && IsOMathParaWrapperParagraph(wp)
+                ? "oMathPara"
+                : c.LocalName)
             .Select(g => $"{g.Key}({g.Count()})")
             .Take(10)
             .ToList();
