@@ -3570,11 +3570,14 @@ public static partial class WordBatchEmitter
     private static readonly string[] s_styleShellProps =
         ["id", "styleId", "type", "name", "default", "customStyle"];
 
-    // Opt-in toggle for recursive style decomposition. Defaults from the env
-    // var; settable (internal) so tests can exercise the path deterministically
-    // without depending on process-env / static-init timing.
+    // Recursive style decomposition: emit each <w:style> as typed `add` ops
+    // rather than a verbatim raw-set replace (residue falls back to raw-set).
+    // ON by default; set OFFICECLI_RECURSIVE_STYLE_DECOMP=0 to fall back to the
+    // legacy whole-style raw-set path. Settable (internal) so tests can select
+    // the path deterministically without depending on process-env / static-init
+    // timing under parallel test execution.
     internal static bool RecursiveStyleDecomp =
-        Environment.GetEnvironmentVariable("OFFICECLI_RECURSIVE_STYLE_DECOMP") == "1";
+        Environment.GetEnvironmentVariable("OFFICECLI_RECURSIVE_STYLE_DECOMP") != "0";
 
     // Well-known OOXML namespace → canonical prefix, the inverse of the add
     // path's CommonNamespaces. A namespace absent here is treated as residue
