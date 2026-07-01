@@ -1919,7 +1919,26 @@ public partial class PowerPointHandler
             // TextWarp (WordArt)
             var prstTxWarp = bodyPr.GetFirstChild<Drawing.PresetTextWarp>();
             if (prstTxWarp?.Preset?.HasValue == true)
+            {
                 node.Format["textWarp"] = prstTxWarp.Preset.InnerText;
+                // Verbatim form when the warp carries adjust values — the
+                // preset-name-only readback loses <a:avLst><a:gd fmla=…>,
+                // flattening the curve amount on dump→replay.
+                if (prstTxWarp.AdjustValueList?.HasChildren == true)
+                    node.Format["textWarpRaw"] = prstTxWarp.OuterXml;
+            }
+
+            // 3D text: <a:scene3d>/<a:sp3d> INSIDE bodyPr (camera/lighting +
+            // extrusion/bevel — distinct from the shape-level pair on spPr).
+            // Previously dropped entirely, so a WordArt-3D deck replayed flat
+            // (sample12). Verbatim raw carriers, spliced back by the
+            // textScene3dRaw / textSp3dRaw Set cases.
+            var bodyScene3d = bodyPr.GetFirstChild<Drawing.Scene3DType>();
+            if (bodyScene3d != null)
+                node.Format["textScene3dRaw"] = bodyScene3d.OuterXml;
+            var bodySp3d = bodyPr.GetFirstChild<Drawing.Shape3DType>();
+            if (bodySp3d != null)
+                node.Format["textSp3dRaw"] = bodySp3d.OuterXml;
 
             // Word-wrap (a:bodyPr @wrap = "square" | "none"). Set already
             // accepts wrap=true/false and writes Square/None; Get must
@@ -2643,6 +2662,15 @@ public partial class PowerPointHandler
             .GetFirstChild<Drawing.PresetGeometry>()?.Preset?.InnerText;
         if (!string.IsNullOrEmpty(picPresetName) && picPresetName != "rect")
             node.Format["geometry"] = picPresetName;
+
+        // Crop-to-CUSTOM-shape: a picture cropped to a freeform carries
+        // <a:custGeom> instead of prstGeom (sample11). Surface the verbatim
+        // XML — AddPicture consumes customGeometryXml the same way AddShape
+        // does, so the crop path replays byte-faithfully instead of falling
+        // back to the default rect.
+        var picCustGeom = pic.ShapeProperties?.GetFirstChild<Drawing.CustomGeometry>();
+        if (picCustGeom != null)
+            node.Format["customGeometryXml"] = picCustGeom.OuterXml;
 
         // CONSISTENCY(zorder): mirror shape/connector — emit for any
         // ShapeTree-rooted picture so Add(picture, zorder=N) round-trips.

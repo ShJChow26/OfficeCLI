@@ -395,12 +395,22 @@ public partial class PowerPointHandler
                 picture.ShapeProperties.Transform2D = new Drawing.Transform2D();
                 picture.ShapeProperties.Transform2D.Offset = new Drawing.Offset { X = xEmu, Y = yEmu };
                 picture.ShapeProperties.Transform2D.Extents = new Drawing.Extents { Cx = cxEmu, Cy = cyEmu };
-                var picGeomName = "rect";
-                if (properties.TryGetValue("geometry", out var picGeom) || properties.TryGetValue("shape", out picGeom))
-                    picGeomName = picGeom;
-                picture.ShapeProperties.AppendChild(
-                    new Drawing.PresetGeometry(new Drawing.AdjustValueList()) { Preset = ParsePresetShape(picGeomName) }
-                );
+                // Crop-to-shape: verbatim <a:custGeom> (crop to freeform,
+                // mirrors AddShape's customGeometryXml splice) wins over a
+                // preset name; default rect otherwise.
+                if (properties.TryGetValue("customGeometryXml", out var picCustXml) && picCustXml.Length > 0)
+                {
+                    picture.ShapeProperties.AppendChild(new Drawing.CustomGeometry(picCustXml));
+                }
+                else
+                {
+                    var picGeomName = "rect";
+                    if (properties.TryGetValue("geometry", out var picGeom) || properties.TryGetValue("shape", out picGeom))
+                        picGeomName = picGeom;
+                    picture.ShapeProperties.AppendChild(
+                        new Drawing.PresetGeometry(new Drawing.AdjustValueList()) { Preset = ParsePresetShape(picGeomName) }
+                    );
+                }
 
                 // CONSISTENCY(shape-picture-parity): rotation lives on the
                 // same Transform2D as shape/connector/group; PowerPoint

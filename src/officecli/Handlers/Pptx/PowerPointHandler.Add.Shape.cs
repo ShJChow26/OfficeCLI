@@ -871,6 +871,11 @@ public partial class PowerPointHandler
                       "textfill", "textgradient", "geometry",
                       "baseline", "superscript", "subscript",
                       "textwarp", "wordart", "autofit",
+                      // WordArt raw forms — verbatim prstTxWarp (keeps avLst)
+                      // and the bodyPr-level 3D-text scene3d/sp3d pair.
+                      "textwarpraw", "textWarpRaw",
+                      "textscene3draw", "textScene3dRaw",
+                      "textsp3draw", "textSp3dRaw",
                       // shrink-on-overflow scale — consumed alongside autofit=normal
                       "fontScale", "fontscale", "lnSpcReduction", "lnspcreduction",
                       "wrap", "wordwrap",

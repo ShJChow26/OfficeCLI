@@ -1571,6 +1571,48 @@ public partial class PowerPointHandler
                     break;
                 }
 
+                case "textwarpraw":
+                {
+                    // Verbatim <a:prstTxWarp> (round-trips the avLst adjust
+                    // values the semantic textwarp= preset-name form loses).
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.RemoveAllChildren<Drawing.PresetTextWarp>();
+                    if (!string.IsNullOrWhiteSpace(value))
+                        bodyPr.InsertAt(new Drawing.PresetTextWarp(value), 0); // schema: first bodyPr child
+                    break;
+                }
+
+                case "textscene3draw":
+                {
+                    // Verbatim <a:scene3d> INSIDE bodyPr — 3D text camera/light
+                    // (distinct from the shape-level scene3d on spPr).
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.RemoveAllChildren<Drawing.Scene3DType>();
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        // Schema order: …autofit, scene3d, sp3d — insert before
+                        // an existing sp3d, else append.
+                        var sp3dSibling = bodyPr.GetFirstChild<Drawing.Shape3DType>();
+                        var scene = new Drawing.Scene3DType(value);
+                        if (sp3dSibling != null) bodyPr.InsertBefore(scene, sp3dSibling);
+                        else bodyPr.AppendChild(scene);
+                    }
+                    break;
+                }
+
+                case "textsp3draw":
+                {
+                    // Verbatim <a:sp3d> INSIDE bodyPr — 3D text extrusion/bevel.
+                    var bodyPr = shape.TextBody?.Elements<Drawing.BodyProperties>().FirstOrDefault();
+                    if (bodyPr == null) { unsupported.Add(key); break; }
+                    bodyPr.RemoveAllChildren<Drawing.Shape3DType>();
+                    if (!string.IsNullOrWhiteSpace(value))
+                        bodyPr.AppendChild(new Drawing.Shape3DType(value));
+                    break;
+                }
+
                 case "wrap" or "wordwrap":
                 {
                     // Shape-level <a:bodyPr @wrap = "square" | "none">.

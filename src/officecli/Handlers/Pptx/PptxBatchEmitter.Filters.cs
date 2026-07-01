@@ -249,6 +249,13 @@ public static partial class PptxBatchEmitter
             // reading Format["fill"].
         }
 
+        // Same double-emit shape as gradientRaw: textWarpRaw carries the
+        // verbatim <a:prstTxWarp> incl. avLst adjust values; the companion
+        // textWarp preset-name key would reset the warp to defaults if it
+        // applied after the raw install.
+        if (result.ContainsKey("textWarpRaw"))
+            result.Remove("textWarp");
+
         return result;
     }
 }
