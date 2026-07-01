@@ -29,6 +29,7 @@ examples/
 │   ├── sparklines.{md,sh,py,xlsx}             # in-cell line/column/win-loss mini charts + point markers
 │   ├── workbook-settings.{md,sh,py,xlsx}
 │   ├── pivot-tables.{md,sh,py,xlsx}
+│   ├── slicers.{md,sh,py,xlsx}                # pivot-table slicers (field/caption/columnCount/rowHeight)
 │   ├── charts.{md,sh,py,xlsx}               # master chart showcase
 │   └── charts/                              # per-type chart scripts — charts-<type>.{md,sh,py,xlsx}
 │           (demo, basic, advanced, extended, area, bar, boxwhisker,
