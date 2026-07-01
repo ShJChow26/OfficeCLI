@@ -1094,11 +1094,18 @@ public static partial class PptxBatchEmitter
                 // precede it in source. The `--index` arg is not required
                 // because AddLineBreak appends, and we're walking children
                 // in source order — each linebreak lands where it was.
+                // Carry the break's own <a:rPr> (empty-line height) when the
+                // source break has one — see NodeBuilder's linebreak rPrRaw.
+                Dictionary<string, string>? brProps = null;
+                if (child.Format.TryGetValue("rPrRaw", out var brRPrRaw)
+                    && brRPrRaw is string brRPrStr && brRPrStr.Length > 0)
+                    brProps = new Dictionary<string, string> { ["rPrRaw"] = brRPrStr };
                 items.Add(new BatchItem
                 {
                     Command = "add",
                     Parent = paraParent,
                     Type = "linebreak",
+                    Props = brProps,
                 });
             }
         }

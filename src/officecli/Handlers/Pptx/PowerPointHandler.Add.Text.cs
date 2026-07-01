@@ -278,7 +278,7 @@ public partial class PowerPointHandler
                 if (properties.TryGetValue("bulletRaw", out var pBulletRaw) || properties.TryGetValue("bulletraw", out pBulletRaw))
                     ApplyBulletRaw(pProps, pBulletRaw);
                 else if (properties.TryGetValue("list", out var pList) || properties.TryGetValue("liststyle", out pList))
-                    ApplyListStyle(pProps, pList);
+                    ApplyListStyle(pProps, pList, preserveIndent: properties.ContainsKey("indent") || properties.ContainsKey("marginLeft") || properties.ContainsKey("marginleft") || properties.ContainsKey("marL") || properties.ContainsKey("marl"));
                 // Paragraph-level default run properties (verbatim). Bare runs
                 // inherit size/bold/font from here; see ApplyDefRPrRaw.
                 if (properties.TryGetValue("defRPrRaw", out var pDefRPrRaw) || properties.TryGetValue("defrprraw", out pDefRPrRaw))
@@ -541,6 +541,15 @@ public partial class PowerPointHandler
         }
 
         var br = new Drawing.Break();
+        // Verbatim <a:rPr> on the break — controls the empty line's height
+        // (a bare <a:br/> inherits the paragraph size instead). Emitted by
+        // the dump as rPrRaw when the source break carries one.
+        if (properties != null
+            && (properties.TryGetValue("rPrRaw", out var brRPrRaw) || properties.TryGetValue("rprraw", out brRPrRaw))
+            && !string.IsNullOrWhiteSpace(brRPrRaw))
+        {
+            br.AppendChild(new Drawing.RunProperties(brRPrRaw));
+        }
         if (index.HasValue)
         {
             var children = targetPara.ChildElements.ToList();

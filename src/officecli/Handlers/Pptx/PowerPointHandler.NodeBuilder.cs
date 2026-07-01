@@ -2178,6 +2178,14 @@ public partial class PowerPointHandler
                                     Type = "linebreak",
                                     Text = string.Empty,
                                 };
+                                // <a:br><a:rPr sz=…/></a:br>: the break's run
+                                // properties set the empty line's height. A bare
+                                // replayed <a:br/> inherits the paragraph size
+                                // instead (sample19: 14pt breaks came back 24pt,
+                                // shifting everything below by 10pt per break).
+                                var brRPr = brChild.GetFirstChild<Drawing.RunProperties>();
+                                if (brRPr != null)
+                                    brNode.Format["rPrRaw"] = brRPr.OuterXml;
                                 paraNode.Children.Add(brNode);
                             }
                         }

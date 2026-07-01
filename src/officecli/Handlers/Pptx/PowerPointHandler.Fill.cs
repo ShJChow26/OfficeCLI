@@ -628,7 +628,8 @@ public partial class PowerPointHandler
     /// Apply list style (bullet/numbered) to ParagraphProperties.
     /// Values: "bullet" or "•", "numbered" or "1", "alpha" or "a", "roman" or "i", "none"
     /// </summary>
-    private static void ApplyListStyle(Drawing.ParagraphProperties pProps, string value)
+    private static void ApplyListStyle(Drawing.ParagraphProperties pProps, string value,
+                                       bool preserveIndent = false)
     {
         pProps.RemoveAllChildren<Drawing.CharacterBullet>();
         pProps.RemoveAllChildren<Drawing.AutoNumberedBullet>();
@@ -669,8 +670,16 @@ public partial class PowerPointHandler
                 break;
             case "none" or "false":
                 pProps.AppendChild(new Drawing.NoBullet());
-                pProps.LeftMargin = null;
-                pProps.Indent = null;
+                // Interactive convenience: removing the bullet also clears the
+                // hanging indent. Skipped when the same property bag carries an
+                // explicit indent/marginLeft — key-iteration order is
+                // undefined, so list=none must not erase a sibling indent=0pt
+                // that was (or will be) applied in the same Set call.
+                if (!preserveIndent)
+                {
+                    pProps.LeftMargin = null;
+                    pProps.Indent = null;
+                }
                 return;
             default:
                 if (value.Length <= 2)

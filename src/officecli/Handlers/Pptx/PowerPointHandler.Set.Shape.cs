@@ -257,6 +257,22 @@ public partial class PowerPointHandler
                     pProps.Indent = (int)Math.Round(SpacingConverter.ParsePointsSigned(value) * EmuConverter.EmuPerPointF);
                     break;
                 }
+                case "liststyle" or "list":
+                {
+                    // Handle here (not via the shape-level fall-through) for two
+                    // reasons: the fall-through delegates a SINGLE-key dict, so
+                    // ApplyListStyle's list=none convenience (clear the hanging
+                    // indent) couldn't see a sibling indent=/marginLeft= in the
+                    // same Set call and erased it (sample19, replayed indent="0"
+                    // vanished); and shape-level scope would restyle every
+                    // paragraph instead of just this one.
+                    var pProps = para.ParagraphProperties ?? (para.ParagraphProperties = new Drawing.ParagraphProperties());
+                    ApplyListStyle(pProps, value, preserveIndent:
+                        properties.ContainsKey("indent") || properties.ContainsKey("marginLeft")
+                        || properties.ContainsKey("marginleft") || properties.ContainsKey("marL")
+                        || properties.ContainsKey("marl"));
+                    break;
+                }
                 case "level":
                 {
                     var pProps = para.ParagraphProperties ?? (para.ParagraphProperties = new Drawing.ParagraphProperties());

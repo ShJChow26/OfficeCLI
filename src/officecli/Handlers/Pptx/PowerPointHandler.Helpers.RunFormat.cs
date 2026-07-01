@@ -32,7 +32,10 @@ public partial class PowerPointHandler
     private static string FormatPptIndentPoints(long emu)
     {
         var pt = emu / EmuConverter.EmuPerPointF;
-        return pt.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + "pt";
+        // 4 decimals: 2-decimal output rounded 216000 EMU → "17.01pt" → 216027
+        // EMU on replay, drifting indents by ~2 EMU per round trip. 0.0001pt
+        // = 1.27 EMU, so four decimals re-parse to the exact source EMU.
+        return pt.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture) + "pt";
     }
 
     /// <summary>
