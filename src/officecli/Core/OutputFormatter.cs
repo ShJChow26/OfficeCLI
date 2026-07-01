@@ -359,7 +359,9 @@ internal static class OutputFormatter
         // "lives inside a paragraph / another part"). WordHandler.CopyFrom throws
         // "Cannot clone '<path>': … <do X> instead." — a bad-argument value the
         // caller can act on, not a handler crash.
-        if (msg.StartsWith("Cannot clone '", StringComparison.Ordinal))
+        if (msg.StartsWith("Cannot clone '", StringComparison.Ordinal)
+            || msg.StartsWith("Cannot move '", StringComparison.Ordinal)
+            || msg.StartsWith("Cannot swap elements", StringComparison.Ordinal))
         {
             result.Code = "invalid_value";
             return;

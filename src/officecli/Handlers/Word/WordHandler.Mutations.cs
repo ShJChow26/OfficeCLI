@@ -1247,6 +1247,30 @@ public partial class WordHandler
             element = mathWrapPara;
         }
 
+        // A diagram group (<wpg:wgp>) lives in <w:drawing> inside a run inside a
+        // paragraph. Moving the bare wgp relocates it as a direct <w:body> child
+        // — schema-invalid. The diagram is emitted into its own paragraph, so
+        // redirect the move to that wrapping paragraph (same shape as the
+        // oMathPara redirect above). If the paragraph also carries other content,
+        // reject rather than move the neighbours with it.
+        if (element.LocalName == "wgp"
+            && element.NamespaceUri == "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup")
+        {
+            var wgpPara = element.Ancestors<Drawing>().FirstOrDefault()
+                ?.Ancestors<Paragraph>().FirstOrDefault();
+            if (wgpPara != null && wgpPara.ChildElements.All(c =>
+                    c is ParagraphProperties
+                    || (c is Run r && r.ChildElements.All(rc => rc is Drawing || rc is RunProperties))))
+            {
+                element = wgpPara;
+            }
+            else
+            {
+                throw new ArgumentException(
+                    $"Cannot move '{sourcePath}': a diagram group lives inside a paragraph; move the containing paragraph (e.g. /body/p[N]) instead.");
+            }
+        }
+
         // Infer --to from --after/--before full path if not specified
         var anchorFullPath = position?.After ?? position?.Before;
         if (string.IsNullOrEmpty(targetParentPath) && anchorFullPath != null && anchorFullPath.StartsWith("/"))
