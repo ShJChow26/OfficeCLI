@@ -3283,11 +3283,44 @@ public partial class WordHandler
             }
         }
 
+        // x / y reposition the whole floating group by updating the anchor's
+        // <wp:positionH>/<wp:positionV> <wp:posOffset> (matches the pptx group's
+        // set x/y, so an agent can move the diagram as a unit in either format).
+        string? xRaw = properties.GetValueOrDefault("x");
+        string? yRaw = properties.GetValueOrDefault("y");
+        if (xRaw != null || yRaw != null)
+        {
+            var anchor = wgp.Ancestors()
+                .FirstOrDefault(e => e.LocalName == "anchor" && e.NamespaceUri == WpNs)
+                as DW.Anchor;
+            if (anchor != null)
+            {
+                if (xRaw != null)
+                    SetAnchorAxisOffset(anchor.GetFirstChild<DW.HorizontalPosition>(),
+                        ParseDrawingSize(xRaw, 914_400));
+                if (yRaw != null)
+                    SetAnchorAxisOffset(anchor.GetFirstChild<DW.VerticalPosition>(),
+                        ParseDrawingSize(yRaw, 914_400));
+            }
+        }
+
         foreach (var k in properties.Keys)
-            if (k.ToLowerInvariant() is not ("width" or "height"))
+            if (k.ToLowerInvariant() is not ("width" or "height" or "x" or "y"))
                 unsupported.Add(k);
         SaveDoc();
         return unsupported;
+    }
+
+    // Set a floating anchor axis (positionH/positionV) to an absolute EMU
+    // <wp:posOffset>, replacing any <wp:align> (align and posOffset are a schema
+    // choice — mutually exclusive). No-op if the axis element is absent.
+    private static void SetAnchorAxisOffset(OpenXmlElement? posAxis, long emu)
+    {
+        if (posAxis == null) return;
+        posAxis.ChildElements
+            .Where(e => e.LocalName is "align" or "posOffset")
+            .ToList().ForEach(e => e.Remove());
+        posAxis.AppendChild(new DW.PositionOffset(emu.ToString()));
     }
 
     // Multiply every child run's font size (w:sz / w:szCs, in half-points) by
