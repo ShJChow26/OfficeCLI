@@ -1700,15 +1700,34 @@ public partial class WordHandler
             pIdx++;
             if (ReferenceEquals(el, hostPara))
             {
+                // The math element sits directly in the paragraph OR nested inside
+                // a w:hyperlink child (dump→batch round-trips equations inside a
+                // hyperlink). Locate its immediate container and include the
+                // /hyperlink[H] segment when present — otherwise the index lookup
+                // fails (mathEl isn't a direct child of hostPara) and the caller
+                // keeps the stale pre-move path.
+                var container = mathEl.Parent!;
+                var prefix = $"/body/p[{pIdx}]";
+                if (container is Hyperlink hl)
+                {
+                    int hIdx = hostPara.Elements<Hyperlink>().ToList()
+                        .FindIndex(h => ReferenceEquals(h, hl)) + 1;
+                    if (hIdx <= 0) return null;
+                    prefix += $"/hyperlink[{hIdx}]";
+                }
+                else if (!ReferenceEquals(container, hostPara))
+                {
+                    return null; // nesting we don't address
+                }
                 if (isDisplay)
                 {
-                    int k = hostPara.Elements<M.Paragraph>().ToList()
+                    int k = container.Elements<M.Paragraph>().ToList()
                         .FindIndex(e => ReferenceEquals(e, mathEl)) + 1;
-                    return k > 0 ? $"/body/p[{pIdx}]/oMathPara[{k}]" : null;
+                    return k > 0 ? $"{prefix}/oMathPara[{k}]" : null;
                 }
-                int kk = hostPara.Elements<M.OfficeMath>().ToList()
+                int kk = container.Elements<M.OfficeMath>().ToList()
                     .FindIndex(e => ReferenceEquals(e, mathEl)) + 1;
-                return kk > 0 ? $"/body/p[{pIdx}]/oMath[{kk}]" : null;
+                return kk > 0 ? $"{prefix}/oMath[{kk}]" : null;
             }
         }
         return null;
