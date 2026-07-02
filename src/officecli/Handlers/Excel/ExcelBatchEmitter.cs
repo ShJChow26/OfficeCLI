@@ -112,6 +112,9 @@ public static partial class ExcelBatchEmitter
         // pivot itself (including sheets emitted later).
         foreach (var sheetName in sheetNames)
             EmitPivotTables(xl, "/" + sheetName, xl.GetDumpPivotCount(sheetName), items, warnings);
+        // Slicers bind to pivots by name — replay after the pivot pass.
+        foreach (var sheetName in sheetNames)
+            EmitSlicers(xl, "/" + sheetName, xl.GetDumpSlicerCount(sheetName), items, warnings);
 
         EmitNamedRanges(xl, items, warnings);
         EmitDocPropsScan(xl, warnings);
@@ -149,6 +152,7 @@ public static partial class ExcelBatchEmitter
         var warnings = new List<UnsupportedWarning>();
         EmitSheet(xl, sheetName, renameFirstSheet: false, items, warnings);
         EmitPivotTables(xl, "/" + sheetName, xl.GetDumpPivotCount(sheetName), items, warnings);
+        EmitSlicers(xl, "/" + sheetName, xl.GetDumpSlicerCount(sheetName), items, warnings);
         return (items, warnings);
     }
 
@@ -192,6 +196,9 @@ public static partial class ExcelBatchEmitter
             // sheet-level printarea/printtitlerows emits — re-adding them here
             // would duplicate the defined name.
             if (name!.StartsWith("_xlnm.", StringComparison.OrdinalIgnoreCase)) continue;
+            // Slicer bookkeeping names (ref literally "#N/A") are created by
+            // AddSlicer on replay; re-adding one collides with it.
+            if (string.Equals(refVal, "#N/A", StringComparison.OrdinalIgnoreCase)) continue;
             var props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["name"] = name!,

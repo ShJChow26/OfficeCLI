@@ -307,12 +307,106 @@ public partial class ExcelHandler
             .Count(e => e.LocalName == "slicer" && e.NamespaceUri.Contains("2009/9/main"));
     }
 
+    /// <summary>
+    /// Per-shape flags (aligned with the shape[N] index space) marking
+    /// shapes that live inside an mc:AlternateContent Fallback — e.g. the
+    /// "Slicer (requires Excel 2010 or later)" placeholder rectangle a
+    /// slicer carries for down-level clients. The dump must skip them:
+    /// AddSlicer regenerates the fallback on replay, and re-adding it as a
+    /// REAL shape both duplicates it and breaks dump idempotency.
+    /// </summary>
+    public List<bool> GetDumpShapeFallbackFlags(string sheetName)
+    {
+        var worksheet = FindWorksheet(sheetName)
+            ?? throw new ArgumentException($"Sheet not found: {sheetName}");
+        var wsDrawing = worksheet.DrawingsPart?.WorksheetDrawing;
+        var flags = new List<bool>();
+        if (wsDrawing == null) return flags;
+        foreach (var (shape, _) in EnumerateLeafShapes(wsDrawing))
+        {
+            var inFallback = false;
+            for (var p = shape.Parent; p != null; p = p.Parent)
+                if (p.LocalName == "Fallback") { inFallback = true; break; }
+            flags.Add(inFallback);
+        }
+        return flags;
+    }
+
     /// <summary>Number of pivot tables on a sheet (pivottable[N] index space).</summary>
     public int GetDumpPivotCount(string sheetName)
     {
         var worksheet = FindWorksheet(sheetName)
             ?? throw new ArgumentException($"Sheet not found: {sheetName}");
         return worksheet.PivotTableParts.Count();
+    }
+
+    /// <summary>Per-chart flags (chart[N] index space) marking extended (cx:)
+    /// charts — the semantic chart emit must skip them (they ride the
+    /// verbatim chartex carrier instead).</summary>
+    public List<bool> GetDumpChartExtendedFlags(string sheetName)
+    {
+        var worksheet = FindWorksheet(sheetName)
+            ?? throw new ArgumentException($"Sheet not found: {sheetName}");
+        if (worksheet.DrawingsPart is not { } dp) return new List<bool>();
+        return GetExcelCharts(dp).Select(c => c.IsExtended).ToList();
+    }
+
+    /// <summary>One verbatim chartEx (cx:) carrier per extended chart:
+    /// pinned rIds + base64 part payloads + the hosting TwoCellAnchor XML
+    /// slice. No semantic vocabulary exists for waterfall/funnel/sunburst —
+    /// dump carries the parts byte-for-byte (mirrors pptx SmartArt).</summary>
+    public sealed record DumpChartExSlice(
+        string RelId, string XmlBase64,
+        string? ColorsRelId, string? ColorsXmlBase64,
+        string? StyleRelId, string? StyleXmlBase64,
+        string AnchorXml);
+
+    public List<DumpChartExSlice> GetDumpChartExSlices(string sheetName)
+    {
+        var result = new List<DumpChartExSlice>();
+        var worksheet = FindWorksheet(sheetName);
+        var drawingsPart = worksheet?.DrawingsPart;
+        var wsDrawing = drawingsPart?.WorksheetDrawing;
+        if (worksheet == null || drawingsPart == null || wsDrawing == null) return result;
+
+        static string ReadPartBase64(OpenXmlPart part)
+        {
+            using var s = part.GetStream();
+            using var ms = new MemoryStream();
+            s.CopyTo(ms);
+            return Convert.ToBase64String(ms.ToArray());
+        }
+
+        foreach (var anchor in wsDrawing.Elements<DocumentFormat.OpenXml.Drawing.Spreadsheet.TwoCellAnchor>())
+        {
+            // A chartEx frame references its part via <cx:chart r:id> inside
+            // a graphicData with the chartex uri.
+            var cxRef = anchor.Descendants()
+                .FirstOrDefault(e => e.LocalName == "chart"
+                    && e.NamespaceUri.Contains("chartex", StringComparison.OrdinalIgnoreCase));
+            if (cxRef == null) continue;
+            var relId = cxRef.GetAttributes()
+                .FirstOrDefault(a => a.LocalName == "id").Value;
+            if (string.IsNullOrEmpty(relId)) continue;
+            if (drawingsPart.GetPartById(relId!) is not ExtendedChartPart extPart) continue;
+
+            string? colorsRid = null, colorsXml = null, styleRid = null, styleXml = null;
+            foreach (var sub in extPart.Parts)
+            {
+                switch (sub.OpenXmlPart)
+                {
+                    case ChartColorStylePart cp:
+                        colorsRid = sub.RelationshipId; colorsXml = ReadPartBase64(cp); break;
+                    case ChartStylePart sp:
+                        styleRid = sub.RelationshipId; styleXml = ReadPartBase64(sp); break;
+                }
+            }
+            result.Add(new DumpChartExSlice(
+                relId!, ReadPartBase64(extPart),
+                colorsRid, colorsXml, styleRid, styleXml,
+                anchor.OuterXml));
+        }
+        return result;
     }
 
     /// <summary>Drawing-layer counts (pictures / leaf shapes) matching the
@@ -388,12 +482,6 @@ public partial class ExcelHandler
         // this scan covers only what still has no emit channel.
         AddIf(worksheet.EmbeddedObjectParts.Any() || worksheet.EmbeddedPackageParts.Any(), "ole",
             "embedded OLE objects are not round-tripped by dump yet");
-        var extLst = ws.GetFirstChild<WorksheetExtensionList>();
-        if (extLst != null)
-        {
-            AddIf(extLst.OuterXml.Contains("slicerList", StringComparison.OrdinalIgnoreCase), "slicer",
-                "slicers are not round-tripped by dump yet");
-        }
         return result;
     }
 }

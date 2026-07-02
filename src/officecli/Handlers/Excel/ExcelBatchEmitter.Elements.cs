@@ -27,9 +27,7 @@ public static partial class ExcelBatchEmitter
         var drawingCounts = xl.GetDumpDrawingCounts(sheetName);
         EmitPictures(xl, sheetName, sheetPath, drawingCounts.Pictures, items, warnings);
         EmitShapes(xl, sheetPath, drawingCounts.Shapes, items, warnings);
-        if (counts.HasExtendedChart)
-            warnings.Add(new UnsupportedWarning("chartex", sheetPath,
-                "extended (chartEx) charts have no add vocabulary and are not round-tripped"));
+        EmitChartExCharts(xl, sheetName, sheetPath, items, warnings);
     }
 
     // ==================== Tables ====================
@@ -255,8 +253,12 @@ public static partial class ExcelBatchEmitter
     private static void EmitCharts(ExcelHandler xl, string sheetPath, int count,
         List<BatchItem> items, List<UnsupportedWarning> warnings)
     {
+        // Extended (cx:) charts ride the verbatim chartex carrier
+        // (EmitChartExCharts); emitting them here too would double them.
+        var extendedFlags = xl.GetDumpChartExtendedFlags(sheetPath.TrimStart('/'));
         for (int i = 1; i <= count; i++)
         {
+            if (i - 1 < extendedFlags.Count && extendedFlags[i - 1]) continue;
             DocumentNode chart;
             try { chart = xl.Get($"{sheetPath}/chart[{i}]"); }
             catch (Exception ex)
@@ -393,8 +395,13 @@ public static partial class ExcelBatchEmitter
     private static void EmitShapes(ExcelHandler xl, string sheetPath, int count,
         List<BatchItem> items, List<UnsupportedWarning> warnings)
     {
+        // Skip mc:Fallback placeholder shapes (slicer down-level rectangles):
+        // the owning feature regenerates them on replay; re-adding them as
+        // real shapes duplicates content and breaks dump idempotency.
+        var fallbackFlags = xl.GetDumpShapeFallbackFlags(sheetPath.TrimStart('/'));
         for (int i = 1; i <= count; i++)
         {
+            if (i - 1 < fallbackFlags.Count && fallbackFlags[i - 1]) continue;
             DocumentNode shp;
             try { shp = xl.Get($"{sheetPath}/shape[{i}]"); }
             catch (Exception ex)
@@ -520,6 +527,88 @@ public static partial class ExcelBatchEmitter
                         $"pivot {lossy} state is not round-tripped (no add vocabulary)"));
 
             items.Add(new BatchItem { Command = "add", Parent = sheetPath, Type = "pivottable", Props = props });
+        }
+    }
+
+    // ==================== chartEx (extended charts) ====================
+
+    // Waterfall / funnel / sunburst / treemap etc. have no semantic add
+    // vocabulary; carry the ExtendedChartPart (+ colors/style sub-parts)
+    // verbatim with pinned rIds, then raw-append the hosting TwoCellAnchor
+    // into the sheet's drawing. Mirrors the pptx SmartArt passthrough.
+    private static void EmitChartExCharts(ExcelHandler xl, string sheetName, string sheetPath,
+        List<BatchItem> items, List<UnsupportedWarning> warnings)
+    {
+        List<ExcelHandler.DumpChartExSlice> slices;
+        try { slices = xl.GetDumpChartExSlices(sheetName); }
+        catch (Exception ex)
+        {
+            warnings.Add(new UnsupportedWarning("chartex", sheetPath, $"chartEx scan failed: {ex.Message}"));
+            return;
+        }
+        foreach (var s in slices)
+        {
+            var props = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["rid"] = s.RelId,
+                ["xml"] = s.XmlBase64,
+            };
+            if (s.ColorsRelId != null && s.ColorsXmlBase64 != null)
+            {
+                props["colors-rid"] = s.ColorsRelId;
+                props["colors-xml"] = s.ColorsXmlBase64;
+            }
+            if (s.StyleRelId != null && s.StyleXmlBase64 != null)
+            {
+                props["style-rid"] = s.StyleRelId;
+                props["style-xml"] = s.StyleXmlBase64;
+            }
+            items.Add(new BatchItem { Command = "add-part", Parent = sheetPath, Type = "chartex", Props = props });
+            items.Add(new BatchItem
+            {
+                Command = "raw-set",
+                Part = $"{sheetPath}/drawing",
+                Xpath = "/xdr:wsDr",
+                Action = "append",
+                Xml = s.AnchorXml,
+            });
+        }
+    }
+
+    // ==================== Slicers ====================
+
+    // Runs after EmitPivotTables (a slicer binds to a pivot by name). The
+    // slicer's drawing anchor has no readback surface, so replay lands the
+    // slicer at AddSlicer's default position — surfaced as a warning.
+    internal static void EmitSlicers(ExcelHandler xl, string sheetPath, int count,
+        List<BatchItem> items, List<UnsupportedWarning> warnings)
+    {
+        for (int i = 1; i <= count; i++)
+        {
+            DocumentNode sl;
+            try { sl = xl.Get($"{sheetPath}/slicer[{i}]"); }
+            catch (Exception ex)
+            {
+                warnings.Add(new UnsupportedWarning("slicer", $"{sheetPath}/slicer[{i}]", ex.Message));
+                continue;
+            }
+            var props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            CopyString(sl, "pivotTable", props, "pivotTable");
+            CopyString(sl, "field", props, "field");
+            if (!props.ContainsKey("pivotTable") || !props.ContainsKey("field"))
+            {
+                warnings.Add(new UnsupportedWarning("slicer", sl.Path ?? sheetPath,
+                    "slicer pivot binding could not be read; skipped"));
+                continue;
+            }
+            CopyString(sl, "name", props, "name");
+            CopyString(sl, "caption", props, "caption");
+            CopyString(sl, "style", props, "style");
+            CopyValue(sl, "columnCount", props, "columnCount");
+            CopyValue(sl, "rowHeight", props, "rowHeight");
+            warnings.Add(new UnsupportedWarning("slicer", sl.Path ?? sheetPath,
+                "slicer position and item selection state are not round-tripped (no readback surface); replay uses defaults"));
+            items.Add(new BatchItem { Command = "add", Parent = sheetPath, Type = "slicer", Props = props });
         }
     }
 

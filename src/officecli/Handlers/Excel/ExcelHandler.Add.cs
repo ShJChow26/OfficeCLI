@@ -1052,9 +1052,72 @@ public partial class ExcelHandler
                 var chartIdx = drawingsPart.ChartParts.ToList().IndexOf(chartPart);
                 return (relId, $"/{sheetName}/chart[{chartIdx + 1}]");
 
+            case "chartex":
+            {
+                // Extended (cx:) chart carrier for dump→batch round-trip.
+                // chartEx has no semantic add vocabulary — waterfall/funnel/
+                // sunburst charts are carried VERBATIM: the caller pins the
+                // source rIds so the graphicFrame slice raw-set into the
+                // drawing resolves without rewriting. Mirrors the pptx
+                // SmartArt add-part pattern (pinned rIds + raw payload).
+                // Props: rid (required), xml (base64 cx:chartSpace),
+                // colors-rid/colors-xml, style-rid/style-xml (optional
+                // sub-parts — Excel-authored chartEx always carries both;
+                // dropping them dangles the main part's rels).
+                var cxSheetName = parentPartPath.TrimStart('/');
+                var cxWorksheet = FindWorksheet(cxSheetName)
+                    ?? throw new ArgumentException(
+                        $"Sheet not found: {cxSheetName}. chartex must be added under a sheet: add-part <file> /<SheetName> --type chartex");
+                properties ??= new Dictionary<string, string>();
+                var cxRid = properties.GetValueOrDefault("rid")
+                    ?? throw new ArgumentException("'rid' property is required for chartex (pinned relationship id)");
+                var cxXmlB64 = properties.GetValueOrDefault("xml")
+                    ?? throw new ArgumentException("'xml' property is required for chartex (base64 cx:chartSpace XML)");
+
+                var cxDrawingsPart = cxWorksheet.DrawingsPart
+                    ?? cxWorksheet.AddNewPart<DrawingsPart>();
+                if (cxDrawingsPart.WorksheetDrawing == null)
+                {
+                    cxDrawingsPart.WorksheetDrawing =
+                        new DocumentFormat.OpenXml.Drawing.Spreadsheet.WorksheetDrawing();
+                    cxDrawingsPart.WorksheetDrawing.Save();
+                    if (GetSheet(cxWorksheet).GetFirstChild<DocumentFormat.OpenXml.Spreadsheet.Drawing>() == null)
+                    {
+                        var cxDrawRelId = cxWorksheet.GetIdOfPart(cxDrawingsPart);
+                        GetSheet(cxWorksheet).Append(
+                            new DocumentFormat.OpenXml.Spreadsheet.Drawing { Id = cxDrawRelId });
+                        SaveWorksheet(cxWorksheet);
+                    }
+                }
+
+                var extChartPart = cxDrawingsPart.AddNewPart<ExtendedChartPart>(cxRid);
+                using (var s = extChartPart.GetStream(System.IO.FileMode.Create, System.IO.FileAccess.Write))
+                {
+                    var bytes = Convert.FromBase64String(cxXmlB64);
+                    s.Write(bytes, 0, bytes.Length);
+                }
+                foreach (var (ridKey, xmlKey, subType) in new[]
+                {
+                    ("colors-rid", "colors-xml", "colors"),
+                    ("style-rid", "style-xml", "style"),
+                })
+                {
+                    var subRid = properties.GetValueOrDefault(ridKey);
+                    var subXml = properties.GetValueOrDefault(xmlKey);
+                    if (string.IsNullOrEmpty(subRid) || string.IsNullOrEmpty(subXml)) continue;
+                    OpenXmlPart subPart = subType == "colors"
+                        ? extChartPart.AddNewPart<ChartColorStylePart>(subRid)
+                        : extChartPart.AddNewPart<ChartStylePart>(subRid);
+                    using var ss = subPart.GetStream(System.IO.FileMode.Create, System.IO.FileAccess.Write);
+                    var subBytes = Convert.FromBase64String(subXml!);
+                    ss.Write(subBytes, 0, subBytes.Length);
+                }
+                return (cxRid, $"/{cxSheetName}/chartex");
+            }
+
             default:
                 throw new ArgumentException(
-                    $"Unknown part type: {partType}. Supported: chart");
+                    $"Unknown part type: {partType}. Supported: chart, chartex");
         }
     }
 }
