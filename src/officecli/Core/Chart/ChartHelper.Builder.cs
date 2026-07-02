@@ -45,8 +45,25 @@ internal static partial class ChartHelper
         {
             // Empty <c:title/> + autoTitleDeleted=0 → real PowerPoint renders
             // its localized "Chart Title" placeholder (multi-series source
-            // charts authored with an automatic title).
-            chart.AppendChild(new C.Title());
+            // charts authored with an automatic title). The captured
+            // title.pPr (font size/color) rides in c:title/c:txPr so the
+            // placeholder keeps the authored styling.
+            var autoTitleEl = new C.Title();
+            if (properties.TryGetValue("title.pPr", out var autoTitlePPr)
+                && !string.IsNullOrWhiteSpace(autoTitlePPr))
+            {
+                try
+                {
+                    var autoTitlePara = new Drawing.Paragraph();
+                    autoTitlePara.AppendChild(new Drawing.ParagraphProperties(autoTitlePPr));
+                    var autoTitleTxPr = new C.TextProperties(
+                        new Drawing.BodyProperties(), new Drawing.ListStyle());
+                    autoTitleTxPr.AppendChild(autoTitlePara);
+                    autoTitleEl.AppendChild(autoTitleTxPr);
+                }
+                catch { /* malformed captured pPr — placeholder stays unstyled */ }
+            }
+            chart.AppendChild(autoTitleEl);
             chart.AppendChild(new C.AutoTitleDeleted { Val = false });
         }
 
