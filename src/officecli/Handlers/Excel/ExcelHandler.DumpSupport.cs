@@ -513,6 +513,48 @@ public partial class ExcelHandler
         return result;
     }
 
+    /// <summary>Total-row rectangles ("A4:D4") of tables with a totals row.
+    /// The totals row is derived render output that `add table totalRow=true`
+    /// regenerates on replay — the value baseline must exclude it (same rule
+    /// as pivot location rectangles).</summary>
+    public List<string> GetDumpTableTotalRowRects(string sheetName)
+    {
+        var result = new List<string>();
+        var worksheet = FindWorksheet(sheetName);
+        if (worksheet == null) return result;
+        foreach (var tdp in worksheet.TableDefinitionParts)
+        {
+            var tbl = tdp.Table;
+            if (tbl == null || (tbl.TotalsRowCount?.Value ?? 0) == 0) continue;
+            var refStr = tbl.Reference?.Value;
+            if (string.IsNullOrEmpty(refStr) || !refStr!.Contains(':')) continue;
+            var parts = refStr.Split(':');
+            var (c1, _) = ParseCellReference(parts[0]);
+            var (c2, r2) = ParseCellReference(parts[1]);
+            result.Add($"{c1}{r2}:{c2}{r2}");
+        }
+        return result;
+    }
+
+    /// <summary>Per-column totals-row function tokens ("none,sum,average")
+    /// for table[index] (1-based, TableDefinitionParts order — same space as
+    /// Get's table[N]). Null when the table has no totals row. Feeds the
+    /// emitter's `totalsRowFunction=` prop so replay rebuilds each column's
+    /// aggregation exactly instead of AddTable's label+SUM default.</summary>
+    public string? GetDumpTableTotalsTokens(string sheetName, int index)
+    {
+        var worksheet = FindWorksheet(sheetName);
+        if (worksheet == null) return null;
+        var tdps = worksheet.TableDefinitionParts.ToList();
+        if (index < 1 || index > tdps.Count) return null;
+        var tbl = tdps[index - 1].Table;
+        if (tbl == null || (tbl.TotalsRowCount?.Value ?? 0) == 0) return null;
+        var cols = tbl.GetFirstChild<TableColumns>()?.Elements<TableColumn>().ToList();
+        if (cols == null) return null;
+        return string.Join(",", cols.Select(c =>
+            c.TotalsRowFunction?.InnerText?.ToLowerInvariant() ?? "none"));
+    }
+
     /// <summary>Drawing-layer counts (pictures / leaf shapes) matching the
     /// picture[N] / shape[N] Get index spaces.</summary>
     public (int Pictures, int Shapes) GetDumpDrawingCounts(string sheetName)

@@ -55,7 +55,24 @@ public static partial class ExcelBatchEmitter
             if (t.Format.TryGetValue("headerRow", out var hr) && hr is bool hrB && !hrB)
                 props["headerRow"] = "false";
             if (t.Format.TryGetValue("totalRow", out var tr) && tr is bool trB && trB)
+            {
                 props["totalRow"] = "true";
+                // The OOXML ref INCLUDES the totals row, but AddTable expands
+                // its ref by one row when totalRow=true — emitting the raw ref
+                // grew the table a row per replay cycle. Emit the data-only ref.
+                if (props.TryGetValue("ref", out var fullRef) && fullRef.Contains(':'))
+                {
+                    var rp = fullRef.Split(':');
+                    var m2 = System.Text.RegularExpressions.Regex.Match(rp[1], @"^([A-Za-z]+)(\d+)$");
+                    if (m2.Success && int.TryParse(m2.Groups[2].Value, out var lastRow) && lastRow > 1)
+                        props["ref"] = $"{rp[0]}:{m2.Groups[1].Value}{lastRow - 1}";
+                }
+                // Per-column aggregation tokens; without them replay falls
+                // back to AddTable's label+SUM default (average became sum).
+                var tokens = xl.GetDumpTableTotalsTokens(sheetPath.TrimStart('/'), i);
+                if (!string.IsNullOrEmpty(tokens))
+                    props["totalsRowFunction"] = tokens!;
+            }
             CopyBool(t, "bandedRows", props, "bandedRows");
             CopyBool(t, "bandedCols", props, "bandedCols");
             CopyBool(t, "firstCol", props, "firstCol");
@@ -206,6 +223,9 @@ public static partial class ExcelBatchEmitter
             {
                 "ref", "type", "operator", "formula1", "formula2",
                 "errorTitle", "error", "promptTitle", "prompt",
+                // errorStyle: warning/information popups silently became the
+                // stop default on replay when this was omitted.
+                "errorStyle",
             })
                 CopyString(dv, key, props, key);
             foreach (var key in new[] { "allowBlank", "showError", "showInput" })

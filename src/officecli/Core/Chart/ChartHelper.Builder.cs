@@ -325,11 +325,17 @@ internal static partial class ChartHelper
                 string[]? comboTypes = null;
                 if (properties.TryGetValue("comboTypes", out var ctList))
                     comboTypes = ctList.Split(',').Select(t => t.Trim().ToLowerInvariant()).ToArray();
+                // Probe combosplit unconditionally: it is a legitimately
+                // accepted prop (dump emits it alongside comboTypes), and the
+                // TrackingPropertyDictionary reports any never-read key as
+                // unsupported_property — reading it only inside the fallback
+                // branch produced a false warning on every combo-chart replay.
+                var hasComboSplit = properties.TryGetValue("combosplit", out var splitStr);
                 if (comboTypes == null || comboTypes.Length == 0)
                 {
                     int splitAt = 1;
-                    if (properties.TryGetValue("combosplit", out var splitStr))
-                        splitAt = ParseHelpers.SafeParseInt(splitStr, "combosplit");
+                    if (hasComboSplit)
+                        splitAt = ParseHelpers.SafeParseInt(splitStr!, "combosplit");
                     splitAt = Math.Min(splitAt, seriesData.Count);
                     comboTypes = new string[seriesData.Count];
                     for (int i = 0; i < seriesData.Count; i++)

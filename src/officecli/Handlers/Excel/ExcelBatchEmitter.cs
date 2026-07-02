@@ -150,7 +150,7 @@ public static partial class ExcelBatchEmitter
 
         var items = new List<BatchItem>();
         var warnings = new List<UnsupportedWarning>();
-        EmitSheet(xl, sheetName, renameFirstSheet: false, items, warnings);
+        EmitSheet(xl, sheetName, renameFirstSheet: false, items, warnings, claimExistingSheet: true);
         EmitPivotTables(xl, "/" + sheetName, xl.GetDumpPivotCount(sheetName), items, warnings);
         EmitSlicers(xl, "/" + sheetName, xl.GetDumpSlicerCount(sheetName), items, warnings);
         return (items, warnings);
@@ -233,7 +233,7 @@ public static partial class ExcelBatchEmitter
     // ==================== Per-sheet emit ====================
 
     private static void EmitSheet(ExcelHandler xl, string sheetName, bool renameFirstSheet,
-        List<BatchItem> items, List<UnsupportedWarning> warnings)
+        List<BatchItem> items, List<UnsupportedWarning> warnings, bool claimExistingSheet = false)
     {
         var sheetPath = "/" + sheetName;
         DocumentNode sheetNode;
@@ -262,12 +262,19 @@ public static partial class ExcelBatchEmitter
         }
         else
         {
+            var sheetProps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["name"] = sheetName };
+            // Subtree dumps replay both onto workbooks lacking the sheet
+            // (clone) and back onto ones that already have it (merge) —
+            // ifExists=use makes the add claim the existing sheet instead of
+            // failing on the duplicate name. Full dumps stay strict: their
+            // contract is a blank target, where a collision is a real error.
+            if (claimExistingSheet) sheetProps["ifExists"] = "use";
             items.Add(new BatchItem
             {
                 Command = "add",
                 Parent = "/",
                 Type = "sheet",
-                Props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["name"] = sheetName },
+                Props = sheetProps,
             });
         }
 
@@ -278,7 +285,13 @@ public static partial class ExcelBatchEmitter
         // corrective sets, styles, links): they are derived render output
         // that `add pivottable` regenerates on replay — importing them as
         // static content would fight the rebuilt pivot.
+        // Table totals rows are equally derived: `add table totalRow=true`
+        // regenerates the label + SUBTOTAL formulas on replay. Leaving them
+        // in the baseline imported them as literal data, and the replayed
+        // AddTable then appended a SECOND totals row below — the ref grew a
+        // row per dump→replay cycle and per-column functions reset.
         var pivotRects = xl.GetDumpPivotLocations(sheetName)
+            .Concat(xl.GetDumpTableTotalRowRects(sheetName))
             .Select(ParseRangeRect)
             .Where(r => r != null)
             .Select(r => r!.Value)

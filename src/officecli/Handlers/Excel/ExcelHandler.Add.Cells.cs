@@ -36,6 +36,14 @@ public partial class ExcelHandler
             .FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
         if (caseMatch != null)
         {
+            // ifExists=use: claim the existing sheet as a success no-op.
+            // Emitted by single-sheet subtree dumps, whose batch must replay
+            // both onto a workbook lacking the sheet (create it) and back
+            // onto one that already has it (merge into it) — the hard
+            // duplicate-name error below broke the second case.
+            if (properties.TryGetValue("ifExists", out var ifExists)
+                && ifExists.Equals("use", StringComparison.OrdinalIgnoreCase))
+                return $"/{caseMatch.Name}";
             // Distinguish the BlankDocCreator-shipped placeholder sheet
             // (untouched, claimable by the first Add) from a real
             // user-created sheet (collision is a genuine error). The
