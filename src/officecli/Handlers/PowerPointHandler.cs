@@ -1942,6 +1942,45 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
                 return (ciRid, parentPartPath);
             }
 
+            case "chartstyle":
+            {
+                // Attach a ChartStylePart / ChartColorStylePart to a slide's
+                // Nth ChartPart with a pinned rId (counterpart of
+                // GetChartStyleParts). Props: chart, kind=style|colors,
+                // rid, data (base64 XML).
+                var csm = System.Text.RegularExpressions.Regex.Match(parentPartPath, @"^/slide\[(\d+)\]$");
+                if (!csm.Success)
+                    throw new ArgumentException("add-part chartstyle: parent must be /slide[N]");
+                if (properties == null
+                    || !properties.TryGetValue("rid", out var csRid) || string.IsNullOrEmpty(csRid))
+                    throw new ArgumentException("add-part chartstyle requires property 'rid'");
+                if (!properties.TryGetValue("chart", out var csOrdRaw) || !int.TryParse(csOrdRaw, out var csOrd))
+                    throw new ArgumentException("add-part chartstyle requires property 'chart' (1-based chart ordinal)");
+                if (!properties.TryGetValue("kind", out var csKind)
+                    || csKind is not ("style" or "colors"))
+                    throw new ArgumentException("add-part chartstyle requires property 'kind' (style|colors)");
+                if (!properties.TryGetValue("data", out var csB64) || string.IsNullOrEmpty(csB64))
+                    throw new ArgumentException("add-part chartstyle requires property 'data' (base64)");
+                var csIdx = int.Parse(csm.Groups[1].Value);
+                var csSlides = GetSlideParts().ToList();
+                if (csIdx < 1 || csIdx > csSlides.Count)
+                    throw new ArgumentException($"slide index {csIdx} out of range");
+                var csCharts = csSlides[csIdx - 1].ChartParts.ToList();
+                if (csOrd < 1 || csOrd > csCharts.Count)
+                    throw new ArgumentException($"chart ordinal {csOrd} out of range (total: {csCharts.Count})");
+                var csChart = csCharts[csOrd - 1];
+                if (csChart.Parts.Any(pp3 => pp3.RelationshipId == csRid))
+                    return (csRid, parentPartPath);
+                byte[] csBytes;
+                try { csBytes = Convert.FromBase64String(csB64); }
+                catch (FormatException) { throw new ArgumentException("add-part chartstyle: 'data' is not valid base64"); }
+                OpenXmlPart csPart = csKind == "style"
+                    ? csChart.AddNewPart<ChartStylePart>(csRid)
+                    : csChart.AddNewPart<ChartColorStylePart>(csRid);
+                using (var css = new MemoryStream(csBytes)) csPart.FeedData(css);
+                return (csRid, parentPartPath);
+            }
+
             case "extrel":
             {
                 // Re-create an EXTERNAL relationship (TargetMode=External) with a
@@ -4513,6 +4552,33 @@ public partial class PowerPointHandler : IDocumentHandler, Rendering.IRenderMode
             st.CopyTo(ms);
             result.Add(new MasterImageInfo(pair.RelationshipId, ip.ContentType,
                 Convert.ToBase64String(ms.ToArray())));
+        }
+        return result;
+    }
+
+    // Modern chart styling sub-parts (ChartStylePart "style1.xml" /
+    // ChartColorStylePart "colors1.xml") attached to a slide's Nth ChartPart.
+    // They drive PowerPoint-2013+ gridline tint / palette / effect defaults;
+    // the semantic chart rebuild dropped them, flattening the chart to the
+    // app default style. Kind is "style" or "colors".
+    internal IReadOnlyList<(string Kind, string RelId, string Base64Data)>
+        GetChartStyleParts(int slideIdx, int chartOrdinal)
+    {
+        var result = new List<(string, string, string)>();
+        var parts = GetSlideParts().ToList();
+        if (slideIdx < 1 || slideIdx > parts.Count) return result;
+        var chartParts = parts[slideIdx - 1].ChartParts.ToList();
+        if (chartOrdinal < 1 || chartOrdinal > chartParts.Count) return result;
+        foreach (var pair in chartParts[chartOrdinal - 1].Parts)
+        {
+            string kind;
+            if (pair.OpenXmlPart is ChartStylePart) kind = "style";
+            else if (pair.OpenXmlPart is ChartColorStylePart) kind = "colors";
+            else continue;
+            using var st = pair.OpenXmlPart.GetStream();
+            using var ms = new MemoryStream();
+            st.CopyTo(ms);
+            result.Add((kind, pair.RelationshipId, Convert.ToBase64String(ms.ToArray())));
         }
         return result;
     }

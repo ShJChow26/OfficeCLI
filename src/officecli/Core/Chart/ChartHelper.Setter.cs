@@ -715,22 +715,25 @@ internal static partial class ChartHelper
                         ? new C.DateAxis()
                         : new C.CategoryAxis();
                     // CONSISTENCY(catax-dateax-stripcatonly): CT_CatAx defines
-                    // <auto>, <lblAlgn>, <lblOffset>, <noMultiLvlLbl> that
-                    // CT_DateAxis does NOT accept. BuildCategoryAxis emits
-                    // <lblAlgn> + <lblOffset> by default, so a fresh cat→date
-                    // conversion would always carry them across and produce a
-                    // schema-invalid <c:dateAx>. Strip them on the cat→date
-                    // path; date→cat preserves everything (no incompatible
-                    // elements in the reverse direction).
+                    // <lblAlgn> and <noMultiLvlLbl> that CT_DateAx does NOT
+                    // accept (per ECMA-376 CT_DateAx keeps <auto> and
+                    // <lblOffset> — real date axes carry both). Strip only
+                    // the truly cat-only pair on the cat→date path; date→cat
+                    // preserves everything (no incompatible elements in the
+                    // reverse direction).
                     var catOnlyLocalNames = new System.Collections.Generic.HashSet<string>(
                         System.StringComparer.Ordinal)
-                    { "auto", "lblAlgn", "lblOffset", "noMultiLvlLbl" };
+                    { "lblAlgn", "noMultiLvlLbl" };
                     foreach (var child in existing.ChildElements.ToList())
                     {
                         child.Remove();
                         if (wantDate && catOnlyLocalNames.Contains(child.LocalName)) continue;
                         replacement.AppendChild(child);
                     }
+                    // baseTimeUnit is NOT hardcoded here: PowerPoint auto-
+                    // selects one when absent, and the axis-level Set surface
+                    // (`set axis[@role=category] baseTimeUnit=…`) carries the
+                    // source's explicit value on dump→replay.
                     plotArea2.InsertBefore(replacement, existing);
                     existing.Remove();
                     break;
@@ -2106,7 +2109,12 @@ internal static partial class ChartHelper
                 case "roundedcorners":
                 {
                     chartSpace!.RemoveAllChildren<C.RoundedCorners>();
-                    chartSpace.PrependChild(new C.RoundedCorners { Val = ParseHelpers.IsTruthy(value) });
+                    var rcEl = new C.RoundedCorners { Val = ParseHelpers.IsTruthy(value) };
+                    // CT_ChartSpace order: date1904, lang, roundedCorners, …
+                    var rcAfter = (OpenXmlElement?)chartSpace.GetFirstChild<C.EditingLanguage>()
+                        ?? chartSpace.GetFirstChild<C.Date1904>();
+                    if (rcAfter != null) rcAfter.InsertAfterSelf(rcEl);
+                    else chartSpace.PrependChild(rcEl);
                     break;
                 }
 

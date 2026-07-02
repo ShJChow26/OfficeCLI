@@ -188,7 +188,20 @@ public static partial class PptxBatchEmitter
                     // series-scoped label font (chart-level fan-out is the
                     // only path that round-trips today).
                     "labelFont.color", "labelFont.size", "labelFont.bold",
-                    "labelFont.name" })
+                    "labelFont.name",
+                    // Chart-fidelity: source cell-range ref for the series
+                    // values. ParseSeriesDataExtended reads the dotted
+                    // `series{N}.valuesRef` and ApplySeriesReferences rebuilds
+                    // <c:numRef><c:f>…</c:f><c:numCache>…</> preserving the
+                    // literal data= values as the cache. Without it a
+                    // ref-authored source replayed as bare numLit.
+                    "valuesRef",
+                    // Theme-inherited series fill (source ser had no spPr) —
+                    // suppresses the DefaultSeriesColors injection at replay.
+                    "inheritFill",
+                    // Explicit invertIfNegative=true round-trip (Reader only
+                    // emits the flag when the source value is true).
+                    "invertIfNeg" })
                 {
                     if (s.Format.TryGetValue(key, out var val) && val != null)
                     {
@@ -213,6 +226,24 @@ public static partial class PptxBatchEmitter
                         if (key == "trendline") anySeriesTrendline = true;
                     }
                 }
+                // Sparse series (blank source cells): Reader pads values with
+                // zeros and lists the blank 0-based indexes. Forward them as
+                // `series{N}._blankIndexes` so BuildNumberingCacheFromLiteral
+                // omits those points from the numCache (Builder consumes the
+                // key only under dispBlanksAs=gap, matching its R20-03 gate —
+                // under blanks-as-zero the padded zeros render identically).
+                if (s.Format.TryGetValue("blankIndexes", out var biVal)
+                    && biVal is string biStr && biStr.Length > 0
+                    // Builder reads _blankIndexes only on the numRef-rewrite
+                    // path — without a valuesRef the key would go unread and
+                    // trip the handler-as-truth unsupported_property warning.
+                    && s.Format.ContainsKey("valuesRef")
+                    && props.TryGetValue("dispBlanksAs", out var dbaVal)
+                    && string.Equals(dbaVal, "gap", StringComparison.OrdinalIgnoreCase))
+                {
+                    props[$"series{seriesIdx}._blankIndexes"] = biStr;
+                }
+
                 // R38: per-point sub-keys (point{M}.color, point{M}.explosion,
                 // point{M}.marker, …) are emitted by Reader onto each series
                 // node but the allowlist above only enumerates fixed keys.
@@ -281,6 +312,32 @@ public static partial class PptxBatchEmitter
             Props = props.Count > 0 ? props : null,
         });
 
+        // Modern chart styling sub-parts (style1.xml / colors1.xml) — carry
+        // them verbatim so PowerPoint keeps the source's gridline tint /
+        // palette / effect defaults instead of the app default style.
+        if (slideOrdM.Success)
+        {
+            IReadOnlyList<(string Kind, string RelId, string Base64Data)> styleParts;
+            try { styleParts = ppt.GetChartStyleParts(int.Parse(slideOrdM.Groups[1].Value), chartOrdinal); }
+            catch { styleParts = Array.Empty<(string, string, string)>(); }
+            foreach (var sp in styleParts)
+            {
+                items.Add(new BatchItem
+                {
+                    Command = "add-part",
+                    Parent = parentSlidePath,
+                    Type = "chartstyle",
+                    Props = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["chart"] = chartOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        ["kind"] = sp.Kind,
+                        ["rid"] = sp.RelId,
+                        ["data"] = sp.Base64Data,
+                    },
+                });
+            }
+        }
+
         foreach (var ci in chartImages)
         {
             items.Add(new BatchItem
@@ -314,7 +371,15 @@ public static partial class PptxBatchEmitter
         // would no longer match. Positional index is stable (chart-only,
         // 1-based within the slide, same ordering as ResolveChart).
         var replayChartPath = $"{parentSlidePath}/chart[{chartOrdinal}]";
-        EmitChartAxesIfDifferent(ppt, fullChart.Path, replayChartPath, items);
+        // Verbatim gridline.spPr owns the gridline stroke — strip the semantic
+        // companions so they can't rebuild the <a:ln> without its tint.
+        bool gridlineSpPrCarried = props.ContainsKey("gridline.spPr");
+        if (gridlineSpPrCarried)
+        {
+            props.Remove("gridlineColor");
+            props.Remove("gridlineWidth");
+        }
+        EmitChartAxesIfDifferent(ppt, fullChart.Path, replayChartPath, items, gridlineSpPrCarried);
     }
 
     // Keys BuildAxisNode emits with synthetic defaults that match a freshly-
@@ -352,7 +417,8 @@ public static partial class PptxBatchEmitter
         new(StringComparer.OrdinalIgnoreCase) { "title", "min", "max", "majorUnit", "format" };
 
     private static void EmitChartAxesIfDifferent(PowerPointHandler ppt,
-        string readChartPath, string replayChartPath, List<BatchItem> items)
+        string readChartPath, string replayChartPath, List<BatchItem> items,
+        bool gridlineSpPrCarried = false)
     {
         if (string.IsNullOrEmpty(readChartPath)) return;
 
@@ -388,6 +454,15 @@ public static partial class PptxBatchEmitter
                 // entirely; the chart-level keys round-trip the full state.
                 if (k.Equals("majorGridlines", StringComparison.OrdinalIgnoreCase)
                   || k.Equals("minorGridlines", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                // When the verbatim gridline.spPr rides the chart add row it
+                // is authoritative for the gridline stroke — a semantic
+                // gridlineColor/gridlineWidth set here would rebuild the
+                // <a:ln> and strip the spPr's lumMod/lumOff tint (raw +
+                // companion double-send family).
+                if (gridlineSpPrCarried
+                    && (k.Equals("gridlineColor", StringComparison.OrdinalIgnoreCase)
+                        || k.Equals("gridlineWidth", StringComparison.OrdinalIgnoreCase)))
                     continue;
                 // visible=true is BuildAxisNode's "always-emit" default.
                 if (k.Equals("visible", StringComparison.OrdinalIgnoreCase)

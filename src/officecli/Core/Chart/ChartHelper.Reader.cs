@@ -44,6 +44,27 @@ internal static partial class ChartHelper
                 ?.GetFirstChild<Drawing.Level1ParagraphProperties>();
             if (rootLvl1?.RightToLeft?.HasValue == true)
                 node.Format["direction"] = rootLvl1.RightToLeft.Value ? "rtl" : "ltr";
+
+            // chartSpace-level default text properties (<c:txPr> directly
+            // under c:chartSpace) set the base font for EVERY chart element
+            // — an 18pt default reshapes axis labels, legend and plot-area
+            // proportions. Carry it verbatim (*Raw family) so dump→replay
+            // preserves the base font.
+            if (rootTxPr != null)
+                node.InternalFormat["chartTxPrRaw"] = rootTxPr.OuterXml;
+
+            // 1904 date epoch flag — Builder always writes an explicit
+            // <c:date1904>, so only the non-default true needs surfacing.
+            if (chartSpace.GetFirstChild<C.Date1904>()?.Val?.Value == true)
+                node.Format["date1904"] = "true";
+
+            // Chart style number (<c:style val="N"/>, or the mc:Fallback
+            // form when the source wraps it in AlternateContent). Drives
+            // gridline tint / effect defaults in real PowerPoint.
+            var styleEl = chartSpace.Elements<C.Style>().FirstOrDefault()
+                ?? chartSpace.Descendants<C.Style>().FirstOrDefault();
+            if (styleEl?.Val?.HasValue == true)
+                node.Format["chartStyle"] = styleEl.Val.Value.ToString();
         }
 
         var chartType = DetectChartType(plotArea);
@@ -134,6 +155,29 @@ internal static partial class ChartHelper
             // 'title' get readback isn't silently empty.
             var strRefFormula = titleEl.Descendants<C.Formula>().FirstOrDefault()?.Text;
             if (!string.IsNullOrEmpty(strRefFormula)) titleText = strRefFormula;
+
+            // Auto-title: an empty <c:title> with autoTitleDeleted=0 makes
+            // real PowerPoint title a SINGLE-series chart with the series
+            // name. Surface that resolved name so dump→replay keeps the
+            // rendered title (the rebuilt chart writes it as literal text).
+            if (titleText == null
+                && chart.GetFirstChild<C.AutoTitleDeleted>()?.Val?.Value != true)
+            {
+                var serEls = plotArea.Descendants<OpenXmlCompositeElement>()
+                    .Where(e => e.LocalName == "ser").ToList();
+                if (serEls.Count == 1)
+                {
+                    var serName = serEls[0].GetFirstChild<C.SeriesText>()
+                        ?.Descendants<C.NumericValue>().FirstOrDefault()?.Text;
+                    if (!string.IsNullOrEmpty(serName)) titleText = serName;
+                }
+                // Multi-series auto-title: PowerPoint renders its localized
+                // "Chart Title" placeholder. No literal text can reproduce
+                // that locale-dependent string — signal the builder to write
+                // an empty <c:title/> + autoTitleDeleted=0 instead.
+                if (titleText == null)
+                    node.Format["autoTitle"] = "true";
+            }
         }
         if (titleText != null) node.Format["title"] = titleText;
 
@@ -973,6 +1017,15 @@ internal static partial class ChartHelper
                 if (serEl != null && IsReferenceLineSeries(serEl))
                     seriesNode.Format["refLine"] = "true";
 
+                // Source series with NO <c:spPr> inherit their fill from the
+                // theme accent cycle. Flag it so a replay suppresses the
+                // DefaultSeriesColors injection (which would pin a modern
+                // Office palette over the deck's own theme colors). Consumed
+                // by SeriesWithNoCapturedFill via series{N}.inheritFill.
+                if (serEl != null
+                    && serEl.GetFirstChild<C.ChartShapeProperties>() == null)
+                    seriesNode.Format["inheritFill"] = "true";
+
                 // Cell reference formulas (for series with NumberReference/StringReference)
                 if (serEl != null)
                 {
@@ -980,6 +1033,25 @@ internal static partial class ChartHelper
                     if (valRef != null) seriesNode.Format["valuesRef"] = valRef;
                     var catRef = ReadFormulaRef(serEl.GetFirstChild<C.CategoryAxisData>());
                     if (catRef != null) seriesNode.Format["categoriesRef"] = catRef;
+
+                    // Sparse series: the source numCache/numLit may hold
+                    // points at non-contiguous idx positions (blank cells in
+                    // the source range — e.g. pts at idx 1,2 of ptCount 4).
+                    // ReadAllSeries compacts them, so a replay would place
+                    // every value at idx 0..n-1 and shift the points left.
+                    // Surface the dense zero-padded value list plus the blank
+                    // index list (0-based) so the batch emitter can rebuild
+                    // the exact point placement via series{N}._blankIndexes.
+                    var sparseValEl = (OpenXmlCompositeElement?)serEl.GetFirstChild<C.Values>()
+                        ?? serEl.GetFirstChild<C.YValues>();
+                    var sparse = ReadSparseNumericData(sparseValEl);
+                    if (sparse != null)
+                    {
+                        seriesNode.Format["values"] = string.Join(",",
+                            sparse.Value.padded.Select(v => v.ToString("G",
+                                System.Globalization.CultureInfo.InvariantCulture)));
+                        seriesNode.Format["blankIndexes"] = string.Join(",", sparse.Value.blanks);
+                    }
 
                     // R44 major-2: scatter series carry X data under <c:xVal>
                     // (not <c:cat>). ReadAllSeries returns only Y values; surface
@@ -1879,6 +1951,41 @@ internal static partial class ChartHelper
             result.Add(IsReferenceLineSeries(ser));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Detect a sparse numeric point list (fewer points than ptCount, i.e.
+    /// blank source cells) inside a val/yVal's numCache or numLit. Returns
+    /// the dense zero-padded value array plus the 0-based blank indexes, or
+    /// null when the data is dense (or absent / malformed).
+    /// </summary>
+    internal static (double[] padded, int[] blanks)? ReadSparseNumericData(OpenXmlCompositeElement? valElement)
+    {
+        if (valElement == null) return null;
+        var container = (OpenXmlCompositeElement?)valElement
+                .GetFirstChild<C.NumberReference>()?.GetFirstChild<C.NumberingCache>()
+            ?? valElement.GetFirstChild<C.NumberLiteral>();
+        if (container == null) return null;
+        var ptCount = (int?)container.GetFirstChild<C.PointCount>()?.Val?.Value ?? -1;
+        var pts = container.Elements<C.NumericPoint>().ToList();
+        if (ptCount <= 0 || pts.Count == 0 || pts.Count >= ptCount) return null;
+        var byIdx = new Dictionary<int, double>();
+        foreach (var pt in pts)
+        {
+            if (pt.Index?.Value is not uint uidx || uidx >= (uint)ptCount) return null;
+            double.TryParse(pt.GetFirstChild<C.NumericValue>()?.Text,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var v);
+            byIdx[(int)uidx] = v;
+        }
+        var padded = new double[ptCount];
+        var blanks = new List<int>();
+        for (int i = 0; i < ptCount; i++)
+        {
+            if (byIdx.TryGetValue(i, out var v)) padded[i] = v;
+            else blanks.Add(i);
+        }
+        return (padded, blanks.ToArray());
     }
 
     internal static double[]? ReadNumericData(OpenXmlCompositeElement? valElement)
