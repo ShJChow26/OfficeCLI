@@ -45,6 +45,17 @@ public partial class ExcelHandler
         }
         else
         {
+            // Qualify bare range references (A1:A3 → Sheet1!A1:A3) before the
+            // shared parser sees them. An unqualified <c:f>$B$1:$B$3</c:f> is
+            // unresolvable inside a chart part — real Excel ignores it and
+            // falls back to ordinal category labels / the stale cache.
+            foreach (var refKey in EnumerateChartRangeKeys(properties))
+            {
+                if (properties.TryGetValue(refKey, out var refVal)
+                    && ChartHelper.IsRangeReference(refVal)
+                    && !refVal.Contains('!'))
+                    properties[refKey] = $"{Core.ModernFunctionQualifier.QuoteSheetNameForRef(chartSheetName)}!{refVal.Trim()}";
+            }
             categories = ChartHelper.ParseCategories(properties);
             seriesData = ChartHelper.ParseSeriesData(properties);
             // CONSISTENCY(chart-series-rangeref-cache): when a series value or
@@ -394,4 +405,19 @@ public partial class ExcelHandler
         return sb.ToString();
     }
 
+    /// <summary>Every chart prop key whose value may be a cell-range
+    /// reference that ends up inside a chart-part c:f formula (and therefore
+    /// must carry a sheet qualifier).</summary>
+    private static IEnumerable<string> EnumerateChartRangeKeys(Dictionary<string, string> properties)
+    {
+        yield return "categories";
+        yield return "categoriesRef";
+        for (int i = 1; i <= 40; i++)
+        {
+            yield return $"series{i}";
+            yield return $"series{i}.values";
+            yield return $"series{i}.categories";
+            yield return $"series{i}.bubbleSize";
+        }
+    }
 }
