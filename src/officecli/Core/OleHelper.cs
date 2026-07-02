@@ -285,9 +285,13 @@ internal static class OleHelper
     /// <paramref name="oleKind"/> ("package"/"object"), <paramref name="contentType"/>
     /// and <paramref name="embedExt"/> come from the source part so the rebuilt
     /// relationship type, content type and target extension match byte-for-byte.
+    /// <paramref name="relId"/>, when set, pins the relationship id — required
+    /// by carriers whose host XML is replayed verbatim (the r:id references
+    /// inside it cannot be rewritten to an SDK-assigned id).
     /// </summary>
     public static (string RelId, OpenXmlPart Part) AddEmbeddedPartFromBytes(
-        OpenXmlPart host, byte[] raw, string oleKind, string contentType, string? embedExt)
+        OpenXmlPart host, byte[] raw, string oleKind, string contentType, string? embedExt,
+        string? relId = null)
     {
         var isPackage = string.Equals(oleKind, "package", StringComparison.OrdinalIgnoreCase);
         OpenXmlPart part;
@@ -298,13 +302,18 @@ internal static class OleHelper
             // so legacy (.xls → application/vnd.ms-excel) and modern formats
             // alike round-trip without a hardcoded content-type table.
             var pt = new PartTypeInfo(contentType, string.IsNullOrEmpty(embedExt) ? "bin" : embedExt);
-            part = host switch
+            part = (host, relId) switch
             {
-                MainDocumentPart mdp => mdp.AddEmbeddedPackagePart(pt),
-                WorksheetPart wp => wp.AddEmbeddedPackagePart(pt),
-                SlidePart sp => sp.AddEmbeddedPackagePart(pt),
-                HeaderPart hp => hp.AddEmbeddedPackagePart(pt),
-                FooterPart fp => fp.AddEmbeddedPackagePart(pt),
+                (MainDocumentPart mdp, null) => mdp.AddEmbeddedPackagePart(pt),
+                (MainDocumentPart mdp, _) => mdp.AddEmbeddedPackagePart(pt, relId),
+                (WorksheetPart wp, null) => wp.AddEmbeddedPackagePart(pt),
+                (WorksheetPart wp, _) => wp.AddEmbeddedPackagePart(pt, relId),
+                (SlidePart sp, null) => sp.AddEmbeddedPackagePart(pt),
+                (SlidePart sp, _) => sp.AddEmbeddedPackagePart(pt, relId),
+                (HeaderPart hp, null) => hp.AddEmbeddedPackagePart(pt),
+                (HeaderPart hp, _) => hp.AddEmbeddedPackagePart(pt, relId),
+                (FooterPart fp, null) => fp.AddEmbeddedPackagePart(pt),
+                (FooterPart fp, _) => fp.AddEmbeddedPackagePart(pt, relId),
                 _ => throw new InvalidOperationException(
                     $"Host part type {host.GetType().Name} does not support embedded packages"),
             };
@@ -314,13 +323,18 @@ internal static class OleHelper
             var ct = string.IsNullOrEmpty(contentType)
                 ? "application/vnd.openxmlformats-officedocument.oleObject"
                 : contentType;
-            part = host switch
+            part = (host, relId) switch
             {
-                MainDocumentPart mdp => mdp.AddEmbeddedObjectPart(ct),
-                WorksheetPart wp => wp.AddEmbeddedObjectPart(ct),
-                SlidePart sp => sp.AddEmbeddedObjectPart(ct),
-                HeaderPart hp => hp.AddEmbeddedObjectPart(ct),
-                FooterPart fp => fp.AddEmbeddedObjectPart(ct),
+                (MainDocumentPart mdp, null) => mdp.AddEmbeddedObjectPart(ct),
+                (MainDocumentPart mdp, _) => mdp.AddEmbeddedObjectPart(ct, relId),
+                (WorksheetPart wp, null) => wp.AddEmbeddedObjectPart(ct),
+                (WorksheetPart wp, _) => wp.AddEmbeddedObjectPart(ct, relId),
+                (SlidePart sp, null) => sp.AddEmbeddedObjectPart(ct),
+                (SlidePart sp, _) => sp.AddEmbeddedObjectPart(ct, relId),
+                (HeaderPart hp, null) => hp.AddEmbeddedObjectPart(ct),
+                (HeaderPart hp, _) => hp.AddEmbeddedObjectPart(ct, relId),
+                (FooterPart fp, null) => fp.AddEmbeddedObjectPart(ct),
+                (FooterPart fp, _) => fp.AddEmbeddedObjectPart(ct, relId),
                 _ => throw new InvalidOperationException(
                     $"Host part type {host.GetType().Name} does not support embedded objects"),
             };

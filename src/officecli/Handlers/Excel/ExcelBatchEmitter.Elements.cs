@@ -597,6 +597,7 @@ public static partial class ExcelBatchEmitter
             {
                 ["rid"] = s.RelId,
                 ["data"] = s.DataBase64,
+                ["ole-kind"] = s.Kind,
                 ["content-type"] = s.ContentType,
                 ["extension"] = s.Extension,
                 ["object-xml"] = s.ObjectXml,

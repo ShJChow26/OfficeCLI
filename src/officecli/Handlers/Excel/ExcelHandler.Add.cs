@@ -1149,19 +1149,21 @@ public partial class ExcelHandler
                 var oleExt = properties.GetValueOrDefault("extension") ?? ".bin";
                 if (!oleExt.StartsWith('.')) oleExt = "." + oleExt;
 
-                // Package vs generic-object auto-select — same rule as pptx.
-                OpenXmlPart olePart;
-                var oleIsPackage = oleCt.StartsWith(
-                        "application/vnd.openxmlformats-officedocument.", StringComparison.OrdinalIgnoreCase)
-                    && !oleCt.Equals(
-                        "application/vnd.openxmlformats-officedocument.oleObject", StringComparison.OrdinalIgnoreCase);
-                var packagePti = oleIsPackage
-                    ? OfficeCli.Core.OleHelper.GetPackagePartTypeInfo("x" + oleExt)
-                    : null;
-                olePart = packagePti != null
-                    ? oleWs.AddEmbeddedPackagePart(packagePti.Value, oleRid)
-                    : oleWs.AddEmbeddedObjectPart(oleCt, oleRid);
-                using (var s = new MemoryStream(oleBytes)) olePart.FeedData(s);
+                // Kind comes from the dump (source part type), because content
+                // type alone cannot classify legacy package formats (.xls
+                // carries application/vnd.ms-excel, not an OOXML CT). Fallback
+                // for hand-written batches that omit ole-kind: package iff the
+                // CT is a non-oleObject openxmlformats CT.
+                var oleKind = properties.GetValueOrDefault("ole-kind")
+                    ?? (oleCt.StartsWith(
+                            "application/vnd.openxmlformats-officedocument.", StringComparison.OrdinalIgnoreCase)
+                        && !oleCt.Equals(
+                            "application/vnd.openxmlformats-officedocument.oleObject", StringComparison.OrdinalIgnoreCase)
+                        ? "package" : "object");
+                // PartTypeInfo's target extension is dot-prefixed (".docx");
+                // a bare "docx" silently falls back to ".bin" part names.
+                OfficeCli.Core.OleHelper.AddEmbeddedPartFromBytes(
+                    oleWs, oleBytes, oleKind, oleCt, oleExt, oleRid);
 
                 // Icon image (objectPr r:id target).
                 var iconRid = properties.GetValueOrDefault("icon-rid");

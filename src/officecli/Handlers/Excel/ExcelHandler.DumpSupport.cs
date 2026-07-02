@@ -355,7 +355,7 @@ public partial class ExcelHandler
     /// payload/icon bytes, the VML anchor shape, and the oleObjects child
     /// element XML. Consumed by ExcelBatchEmitter.EmitOles → add-part ole.</summary>
     public sealed record DumpOleSlice(
-        string RelId, string DataBase64, string ContentType, string Extension,
+        string RelId, string DataBase64, string Kind, string ContentType, string Extension,
         string? IconRelId, string? IconBase64, string? IconContentType,
         string? VmlShapeXml, string ObjectXml);
 
@@ -422,8 +422,12 @@ public partial class ExcelHandler
             // land), which would flip on every dump→replay→dump cycle and
             // break idempotency.
             var objectXml = CanonicalizeXmlAttributeOrder(child.OuterXml);
+            // Kind from the source part type, mirroring the docx dump: content
+            // type alone cannot classify (legacy .xls package parts carry
+            // application/vnd.ms-excel, not an openxmlformats-officedocument CT).
+            var kind = payloadPart is EmbeddedPackagePart ? "package" : "object";
             result.Add(new DumpOleSlice(
-                relId!, Convert.ToBase64String(pms.ToArray()), payloadPart.ContentType, ext,
+                relId!, Convert.ToBase64String(pms.ToArray()), kind, payloadPart.ContentType, ext,
                 iconRid, iconB64, iconCt,
                 shapeXml, objectXml));
         }
