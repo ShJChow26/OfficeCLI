@@ -425,6 +425,21 @@ public partial class PowerPointHandler
                         Text = MakePreservingText(seg)
                     });
                 }
+                else if (paraText.Length == 0)
+                {
+                    // Empty paragraph (spacer line): real PowerPoint computes
+                    // an empty line's height from <a:endParaRPr>, NOT from an
+                    // empty run's rPr — a `<a:r><a:rPr sz="800"/><a:t/></a:r>`
+                    // still renders at the inherited body size, inflating
+                    // designer spacer paragraphs (8pt gap → 22pt gap). Write
+                    // the collected run properties as endParaRPr instead.
+                    var endPr = new Drawing.EndParagraphRunProperties();
+                    foreach (var attr in rProps.GetAttributes())
+                        endPr.SetAttribute(attr);
+                    foreach (var child in rProps.ChildElements)
+                        endPr.AppendChild(child.CloneNode(true));
+                    newPara.Append(endPr);
+                }
                 else
                 {
                     newRun.RunProperties = rProps;
