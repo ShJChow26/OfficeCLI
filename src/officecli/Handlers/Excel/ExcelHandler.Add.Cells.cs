@@ -205,6 +205,22 @@ public partial class ExcelHandler
         // AddCol, which calls ShiftColumnsRight on every positional insert
         // (CONSISTENCY(add-row-col-shift)). When nothing sits at/below rowIdx this
         // is a harmless no-op.
+        // Validate all props BEFORE the structural shift (same atomicity rule
+        // as AddCol): a height/outline parse failure after ShiftRowsDown left
+        // the shift applied even though the add reported an error.
+        double? parsedRowHeight = null;
+        if (properties.TryGetValue("height", out var addRowHeight) && !string.IsNullOrWhiteSpace(addRowHeight))
+            parsedRowHeight = ParseRowHeightPoints(addRowHeight);
+        byte? parsedRowOutline = null;
+        if (properties.TryGetValue("outline", out var addRowOutline)
+            || properties.TryGetValue("outlinelevel", out addRowOutline)
+            || properties.TryGetValue("group", out addRowOutline))
+        {
+            if (!byte.TryParse(addRowOutline, out var addRowOutlineVal) || addRowOutlineVal > 7)
+                throw new ArgumentException($"Invalid 'outline' value: '{addRowOutline}'. Expected an integer 0-7 (outline/group level).");
+            parsedRowOutline = addRowOutlineVal;
+        }
+
         bool needsShift = index.HasValue;
         if (needsShift)
             ShiftRowsDown(worksheet, rowIdx);
@@ -213,9 +229,9 @@ public partial class ExcelHandler
 
         // CONSISTENCY(add-set-symmetry): accept height/hidden at creation
         // time, mirroring SetRow semantics (ExcelHandler.Set.cs L3157-3164).
-        if (properties.TryGetValue("height", out var addRowHeight) && !string.IsNullOrWhiteSpace(addRowHeight))
+        if (parsedRowHeight is { } rh)
         {
-            newRow.Height = ParseRowHeightPoints(addRowHeight);
+            newRow.Height = rh;
             newRow.CustomHeight = true;
         }
         if (properties.TryGetValue("hidden", out var addRowHidden))
@@ -225,14 +241,8 @@ public partial class ExcelHandler
         }
         // CONSISTENCY(add-set-symmetry): accept outline/group + collapsed at
         // creation, mirroring SetRow (ExcelHandler.Set.cs L2823-2832).
-        if (properties.TryGetValue("outline", out var addRowOutline)
-            || properties.TryGetValue("outlinelevel", out addRowOutline)
-            || properties.TryGetValue("group", out addRowOutline))
-        {
-            if (!byte.TryParse(addRowOutline, out var addRowOutlineVal) || addRowOutlineVal > 7)
-                throw new ArgumentException($"Invalid 'outline' value: '{addRowOutline}'. Expected an integer 0-7 (outline/group level).");
-            newRow.OutlineLevel = addRowOutlineVal;
-        }
+        if (parsedRowOutline is { } rowOutlineVal)
+            newRow.OutlineLevel = rowOutlineVal;
         if (properties.TryGetValue("collapsed", out var addRowCollapsed))
         {
             newRow.Collapsed = addRowCollapsed.Equals("true", StringComparison.OrdinalIgnoreCase)
