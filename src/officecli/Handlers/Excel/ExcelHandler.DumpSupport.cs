@@ -530,10 +530,14 @@ public partial class ExcelHandler
                         styleRid = sub.RelationshipId; styleXml = ReadPartBase64(sp); break;
                 }
             }
+            // Canonicalize attribute order for the same reason as the OLE
+            // slice: the SDK preserves authoring order, so xmlns placement
+            // flipped between the typed-construction and outerXml-parse
+            // paths, breaking dump→replay→dump byte idempotency.
             result.Add(new DumpChartExSlice(
                 relId!, ReadPartBase64(extPart),
                 colorsRid, colorsXml, styleRid, styleXml,
-                anchor.OuterXml));
+                CanonicalizeXmlAttributeOrder(anchor.OuterXml)));
         }
         return result;
     }
