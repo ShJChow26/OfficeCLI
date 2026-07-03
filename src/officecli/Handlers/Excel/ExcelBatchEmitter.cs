@@ -75,6 +75,10 @@ public static partial class ExcelBatchEmitter
         ("paperSize", "paperSize"),
         ("fitToPage", "fitToPage"),
         ("printArea", "printArea"),
+        // _xlnm.Print_Titles repeating rows/cols. Mirrors the Print_Area path;
+        // Set accepts the bare "1:2" / "A:A" grammar Get now surfaces.
+        ("printTitleRows", "printTitleRows"),
+        ("printTitleCols", "printTitleCols"),
         ("header", "header"),
         ("footer", "footer"),
         ("margin.top", "margin.top"),
@@ -216,6 +220,9 @@ public static partial class ExcelBatchEmitter
             props["scope"] = string.IsNullOrEmpty(scope) ? "workbook" : scope!;
             if (nr.Format.TryGetValue("comment", out var cm) && cm is string cs && cs.Length > 0)
                 props["comment"] = cs;
+            // volatile (DefinedName.Function) — AddNamedRange consumes it.
+            if (nr.Format.TryGetValue("volatile", out var vol) && IsTruthyFormatValue(vol))
+                props["volatile"] = "true";
             try
             {
                 items.Add(new BatchItem { Command = "add", Parent = "/", Type = "namedrange", Props = props });
@@ -406,6 +413,10 @@ public static partial class ExcelBatchEmitter
             if (colNode.Format.TryGetValue("outlineLevel", out var colv)) cp["outline"] = FormatValue(colv);
             if (colNode.Format.TryGetValue("collapsed", out var cc) && cc is bool ccb && ccb) cp["collapsed"] = "true";
             if (colNode.Format.TryGetValue("bestFit", out var cbf) && IsTruthyFormatValue(cbf)) cp["bestFit"] = "true";
+            // Column-level number format (col @s -> cellXf -> numFmt). Set's
+            // col[X] handler accepts numberformat and re-registers the style.
+            if (colNode.Format.TryGetValue("numberformat", out var cnf) && cnf is string cnfS && cnfS.Length > 0)
+                cp["numberformat"] = cnfS;
             if (cp.Count > 0)
                 items.Add(new BatchItem { Command = "set", Path = colNode.Path, Props = cp });
         }
