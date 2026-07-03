@@ -397,7 +397,16 @@ public partial class ExcelHandler : IDocumentHandler, Rendering.IRenderModelHost
         _ = affected;
     }
 
-    public List<ValidationError> Validate() => RawXmlHelper.ValidateDocument(_doc, _filePath);
+    public List<ValidationError> Validate()
+    {
+        // Mutations defer worksheet child reordering (CF / mergeCells /
+        // hyperlinks / rowBreaks land in insertion order) to FlushDirtyParts,
+        // which Save() runs before writing. Validating the raw in-memory tree
+        // mid-session therefore reported schema-sequence errors on documents
+        // that were perfectly fine once saved. Flush first, same as Save().
+        FlushDirtyParts();
+        return RawXmlHelper.ValidateDocument(_doc, _filePath);
+    }
 
     public void Save()
     {

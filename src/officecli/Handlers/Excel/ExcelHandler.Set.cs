@@ -675,6 +675,14 @@ public partial class ExcelHandler
                     }
                     else
                     {
+                        // Validate the target BEFORE creating the <hyperlinks>
+                        // container: a rejected scheme used to leave an empty
+                        // <x:hyperlinks/> behind — schema-invalid (>=1 child
+                        // required), so real Excel refused the file even
+                        // though the set itself was correctly rejected.
+                        var isInternalTarget = TryParseInternalHyperlinkLocation(value) != null;
+                        if (!isInternalTarget)
+                            Core.HyperlinkUriValidator.RequireSafeScheme(value, "link");
                         if (hyperlinksEl == null)
                         {
                             hyperlinksEl = new Hyperlinks();
