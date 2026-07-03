@@ -694,6 +694,12 @@ public partial class ExcelHandler
         // Hyperlink support during Add
         if ((properties.TryGetValue("link", out var linkUrl) || properties.TryGetValue("url", out linkUrl)) && !string.IsNullOrEmpty(linkUrl))
         {
+            // Validate the scheme BEFORE creating the <hyperlinks> container
+            // (same fix as the Set path): a rejected scheme used to leave an
+            // empty schema-invalid <x:hyperlinks/> behind — Excel 0x800A03EC.
+            var addLinkIsInternal = TryParseInternalHyperlinkLocation(linkUrl) != null;
+            if (!addLinkIsInternal)
+                Core.HyperlinkUriValidator.RequireSafeScheme(linkUrl, "link");
             var ws = GetSheet(cellWorksheet);
             var hyperlinksEl = ws.GetFirstChild<Hyperlinks>();
             if (hyperlinksEl == null)

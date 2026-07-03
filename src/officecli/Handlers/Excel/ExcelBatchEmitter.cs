@@ -66,12 +66,15 @@ public static partial class ExcelBatchEmitter
     {
         ("freeze", "freeze"),
         ("zoom", "zoom"),
-        ("tabColor", "tabcolor"),
-        ("autoFilter", "autofilter"),
+        // Emit the canonical (Get-surface) casing — Set dispatch lowercases
+        // keys, so both spellings replay identically, but dump output should
+        // match what `get` shows (canonical-key convention).
+        ("tabColor", "tabColor"),
+        ("autoFilter", "autoFilter"),
         ("orientation", "orientation"),
-        ("paperSize", "papersize"),
-        ("fitToPage", "fittopage"),
-        ("printArea", "printarea"),
+        ("paperSize", "paperSize"),
+        ("fitToPage", "fitToPage"),
+        ("printArea", "printArea"),
         ("header", "header"),
         ("footer", "footer"),
         ("margin.top", "margin.top"),
