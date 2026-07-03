@@ -252,6 +252,14 @@
       "examples": ["--prop link=https://example.com --prop tooltip=\"Open in browser\""],
       "enforcement": "report"
     },
+    "display": {
+      "type": "string",
+      "description": "friendly display text (@display attribute) for an existing hyperlink. Pair with link= during Add, or apply to a cell that already has a hyperlink during Set.",
+      "add": true, "set": true, "get": true,
+      "examples": ["--prop link=https://example.com --prop display=\"Company site\""],
+      "readback": "display string",
+      "enforcement": "report"
+    },
     "type": {
       "type": "enum",
       "values": ["string", "number", "boolean", "date", "error", "richtext"],

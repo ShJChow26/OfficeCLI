@@ -427,6 +427,12 @@ public partial class ExcelHandler
             if (hyperlink?.Tooltip?.Value is { Length: > 0 } hlTooltip)
                 node.Format["tooltip"] = hlTooltip;
 
+            // Display readback — the @display attribute is the friendly text
+            // Excel shows for the link; without this emit it was invisible to
+            // Get and silently dropped by dump round-trips.
+            if (hyperlink?.Display?.Value is { Length: > 0 } hlDisplay)
+                node.Format["display"] = hlDisplay;
+
             // Border readback from stylesheet
             var styleIndex = cell.StyleIndex?.Value ?? 0;
             var wbStylesPart = _doc.WorkbookPart?.WorkbookStylesPart;
