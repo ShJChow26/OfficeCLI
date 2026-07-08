@@ -125,8 +125,15 @@ public partial class ExcelHandler
     private static bool RangesOverlap(string rangeA, string rangeB)
     {
         if (string.IsNullOrEmpty(rangeA) || string.IsNullOrEmpty(rangeB)) return false;
-        var (a1, a2) = SplitRange(rangeA);
-        var (b1, b2) = SplitRange(rangeB);
+        // Whole-column (A:A) and whole-row (1:3) tokens are legal sqref
+        // members (ValidateSqref admits them), but ParseCellReference below
+        // rejects a bare "A"/"1" — a second dataValidation Add on a sheet
+        // holding any whole-row/col range threw even when geometrically
+        // disjoint. Expand them to explicit rectangles first.
+        var expandedA = ExpandWholeRowColRange(rangeA);
+        var expandedB = ExpandWholeRowColRange(rangeB);
+        var (a1, a2) = SplitRange(expandedA);
+        var (b1, b2) = SplitRange(expandedB);
         var (aSc, aSr) = ParseCellReference(a1);
         var (aEc, aEr) = ParseCellReference(a2);
         var (bSc, bSr) = ParseCellReference(b1);
@@ -139,6 +146,20 @@ public partial class ExcelHandler
         if (aSr > aEr) (aSr, aEr) = (aEr, aSr);
         if (bSr > bEr) (bSr, bEr) = (bEr, bSr);
         return aSci <= bEci && bSci <= aEci && aSr <= bEr && bSr <= aEr;
+    }
+
+    // A:A → A1:A1048576, 1:3 → A1:XFD3. Non-whole ranges pass through.
+    private static string ExpandWholeRowColRange(string range)
+    {
+        var wm = System.Text.RegularExpressions.Regex.Match(range.Trim(),
+            @"^\$?([A-Z]+)\$?:\$?([A-Z]+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (wm.Success)
+            return $"{wm.Groups[1].Value}1:{wm.Groups[2].Value}1048576";
+        var rm = System.Text.RegularExpressions.Regex.Match(range.Trim(),
+            @"^\$?([0-9]+)\$?:\$?([0-9]+)$");
+        if (rm.Success)
+            return $"A{rm.Groups[1].Value}:XFD{rm.Groups[2].Value}";
+        return range;
     }
 
     private static (string, string) SplitRange(string range)

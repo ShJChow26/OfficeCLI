@@ -438,6 +438,26 @@ public partial class ExcelHandler
         if (!ok)
             throw new ArgumentException(
                 $"Invalid sparkline range '{range}'. Expected an A1 range like A1:E1 (optionally sheet-qualified).");
+        // Grid-bounds check, same family as ValidateSqref: shape-valid B0 or
+        // A99999999 landed verbatim in <xne:f>. Excel tolerates rather than
+        // rejects these, but the sparkline is silently broken — tighten to
+        // the severity every other cell-ref entry point now enforces.
+        foreach (var tok in r.Split(':'))
+        {
+            var tm = System.Text.RegularExpressions.Regex.Match(tok.Trim(),
+                @"^([A-Za-z]{1,3})?(\d+)?$");
+            if (tm.Groups[1].Success && tm.Groups[1].Value.Length > 0)
+            {
+                var colIdx = ColumnNameToIndex(tm.Groups[1].Value.ToUpperInvariant());
+                if (colIdx < 1 || colIdx > 16384)
+                    throw new ArgumentException(
+                        $"Invalid sparkline range '{range}': column '{tm.Groups[1].Value}' is outside Excel's grid (A..XFD).");
+            }
+            if (tm.Groups[2].Success && tm.Groups[2].Value.Length > 0
+                && (!long.TryParse(tm.Groups[2].Value, out var rowN) || rowN < 1 || rowN > 1048576))
+                throw new ArgumentException(
+                    $"Invalid sparkline range '{range}': row '{tm.Groups[2].Value}' is outside Excel's grid (1..1048576).");
+        }
     }
 
     /// <summary>Sanity-check a defined-name body. Full formula validation is
