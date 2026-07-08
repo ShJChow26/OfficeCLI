@@ -235,6 +235,29 @@ internal static partial class ChartHelper
             or "bubbleChart";
     }
 
+    // Single source of truth for labelPos alias parsing. Accepts every
+    // friendly alias plus the raw schema tokens the Reader emits verbatim
+    // (ctr, t, b, l, r, outEnd, inEnd, inBase, bestFit) so dump→batch replay
+    // always parses. Unknown tokens throw instead of silently coercing to
+    // OutsideEnd (silent-accept enum-miss family); the three former inline
+    // switches each covered a different subset, so a token accepted on one
+    // path could throw or coerce on another.
+    internal static C.DataLabelPositionValues ParseDataLabelPosition(string value) =>
+        value.ToLowerInvariant() switch
+        {
+            "center" or "ctr" => C.DataLabelPositionValues.Center,
+            "insideend" or "inside" or "inend" => C.DataLabelPositionValues.InsideEnd,
+            "outsideend" or "outside" or "outend" => C.DataLabelPositionValues.OutsideEnd,
+            "insidebase" or "inbase" or "base" => C.DataLabelPositionValues.InsideBase,
+            "top" or "t" => C.DataLabelPositionValues.Top,
+            "bottom" or "b" => C.DataLabelPositionValues.Bottom,
+            "left" or "l" => C.DataLabelPositionValues.Left,
+            "right" or "r" => C.DataLabelPositionValues.Right,
+            "bestfit" or "best" => C.DataLabelPositionValues.BestFit,
+            _ => throw new ArgumentException(
+                $"Unknown label position '{value}'. Valid: center, insideEnd, outsideEnd, insideBase, top, bottom, left, right, bestFit.")
+        };
+
     internal static C.ErrorBars BuildErrorBars(string spec)
     {
         // Format: "type" or "type:value" e.g. "fixed:5", "percent:10", "stddev", "stderr"
@@ -1220,15 +1243,7 @@ internal static partial class ChartHelper
                 // Skip if this dLbl is already marked deleted — delete wins.
                 if (dLbl.GetFirstChild<C.Delete>() is { Val.Value: true }) return;
                 dLbl.RemoveAllChildren<C.DataLabelPosition>();
-                var dlPos = value.ToLowerInvariant() switch
-                {
-                    "center" or "ctr" => C.DataLabelPositionValues.Center,
-                    "insideend" or "inside" => C.DataLabelPositionValues.InsideEnd,
-                    "outsideend" or "outside" => C.DataLabelPositionValues.OutsideEnd,
-                    "bestfit" or "best" => C.DataLabelPositionValues.BestFit,
-                    _ => C.DataLabelPositionValues.OutsideEnd
-                };
-                dLbl.AppendChild(new C.DataLabelPosition { Val = dlPos });
+                dLbl.AppendChild(new C.DataLabelPosition { Val = ParseDataLabelPosition(value) });
                 break;
             }
             case "numfmt":

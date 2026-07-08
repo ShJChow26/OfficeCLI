@@ -204,7 +204,9 @@ public partial class ExcelHandler
         {
             "middle" => X14.DataBarAxisPositionValues.Middle,
             "none" => X14.DataBarAxisPositionValues.None,
-            _ => X14.DataBarAxisPositionValues.Automatic
+            "automatic" or "auto" => X14.DataBarAxisPositionValues.Automatic,
+            _ => throw new ArgumentException(
+                $"Unknown dataBar axisPosition '{dbAxisPos}'. Valid: automatic, middle, none.")
         };
 
         // CF6 — accept user-supplied bar length bounds (defaults follow Excel's
@@ -232,7 +234,8 @@ public partial class ExcelHandler
                 "lefttoright" or "ltr" => X14.DataBarDirectionValues.LeftToRight,
                 "righttoleft" or "rtl" => X14.DataBarDirectionValues.RightToLeft,
                 "context" => X14.DataBarDirectionValues.Context,
-                _ => X14.DataBarDirectionValues.Context
+                _ => throw new ArgumentException(
+                    $"Unknown dataBar direction '{dbDir}'. Valid: leftToRight, rightToLeft, context.")
             };
         }
         var x14MinCfvo = new X14.ConditionalFormattingValueObject
@@ -733,7 +736,10 @@ public partial class ExcelHandler
                         "thisMonth" => TimePeriodValues.ThisMonth,
                         "lastMonth" => TimePeriodValues.LastMonth,
                         "nextMonth" => TimePeriodValues.NextMonth,
-                        _ => TimePeriodValues.Today
+                        // Silent-accept enum-miss family: an unknown period
+                        // must not quietly become "today".
+                        _ => throw new ArgumentException(
+                            $"Unknown timePeriod '{period}'. Valid: today, yesterday, tomorrow, last7Days, thisWeek, lastWeek, nextWeek, thisMonth, lastMonth, nextMonth.")
                     })
                 };
                 break;

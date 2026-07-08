@@ -748,7 +748,8 @@ public partial class ExcelHandler
                     "true" or "single" or "sng" => Drawing.TextUnderlineValues.Single,
                     "double" or "dbl" => Drawing.TextUnderlineValues.Double,
                     "none" or "false" => Drawing.TextUnderlineValues.None,
-                    _ => Drawing.TextUnderlineValues.Single
+                    _ => throw new ArgumentException(
+                        $"Unknown underline value '{shpUnder}'. Valid: single, double, none (true/false).")
                 };
             }
 
@@ -804,7 +805,10 @@ public partial class ExcelHandler
                 {
                     "center" or "c" or "ctr" => Drawing.TextAlignmentTypeValues.Center,
                     "right" or "r" => Drawing.TextAlignmentTypeValues.Right,
-                    _ => Drawing.TextAlignmentTypeValues.Left
+                    "left" or "l" => Drawing.TextAlignmentTypeValues.Left,
+                    "justify" or "just" => Drawing.TextAlignmentTypeValues.Justified,
+                    _ => throw new ArgumentException(
+                        $"Unknown align value '{shpAlign}'. Valid: left, center, right, justify.")
                 };
             }
 
@@ -961,7 +965,9 @@ public partial class ExcelHandler
             {
                 "span" => X14.DisplayBlanksAsValues.Span,
                 "zero" => X14.DisplayBlanksAsValues.Zero,
-                _ => X14.DisplayBlanksAsValues.Gap,
+                "gap" => X14.DisplayBlanksAsValues.Gap,
+                _ => throw new ArgumentException(
+                    $"Unknown displayEmptyCellsAs value '{deca}'. Valid: gap, span, zero."),
             };
         }
         if (properties.TryGetValue("displayxaxis", out var dxa) && ParseHelpers.IsTruthy(dxa))

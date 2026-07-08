@@ -465,7 +465,11 @@ internal static partial class ChartHelper
                     // implicitly enable showVal when used as the dataLabels value. Declared up-front
                     // for the pre-validation step below.
                     var positionValues = new HashSet<string> { "outsideend", "center", "insideend", "insidebase",
-                        "top", "bottom", "left", "right", "bestfit", "t", "b", "l", "r", "outend", "ctr" };
+                        "top", "bottom", "left", "right", "bestfit", "t", "b", "l", "r", "outend", "ctr",
+                        // Raw schema tokens the Reader emits + remaining friendly
+                        // aliases, so every ParseDataLabelPosition spelling is
+                        // recognized as a position token on this path too.
+                        "inend", "inbase", "inside", "outside", "base", "best" };
                     // CONSISTENCY(datalabels-validate-first): the original code called
                     // RemoveAllChildren<C.DataLabels>() BEFORE inspecting tokens, so an unknown
                     // value (e.g. "categoryAndValue") silently wiped the existing dLbls element
@@ -551,10 +555,10 @@ internal static partial class ChartHelper
 
                                 bool allowed = !isAreaRadar && posVal switch
                                 {
-                                    "bestfit" => isPieLike,
-                                    "outsideend" or "outend" => isBarLike || isPieLike,
-                                    "insideend" => isBarLike || isPieLike,
-                                    "insidebase" => isBarLike,
+                                    "bestfit" or "best" => isPieLike,
+                                    "outsideend" or "outside" or "outend" => isBarLike || isPieLike,
+                                    "insideend" or "inside" or "inend" => isBarLike || isPieLike,
+                                    "insidebase" or "inbase" or "base" => isBarLike,
                                     "center" or "ctr" => isBarLike || isLineLike || isPieLike,
                                     "top" or "t" => isLineLike,
                                     "bottom" or "b" => isLineLike,
@@ -565,20 +569,7 @@ internal static partial class ChartHelper
 
                                 if (allowed)
                                 {
-                                    var dLblPos = posVal switch
-                                    {
-                                        "outsideend" or "outend" => C.DataLabelPositionValues.OutsideEnd,
-                                        "insideend" => C.DataLabelPositionValues.InsideEnd,
-                                        "insidebase" => C.DataLabelPositionValues.InsideBase,
-                                        "center" or "ctr" => C.DataLabelPositionValues.Center,
-                                        "top" or "t" => C.DataLabelPositionValues.Top,
-                                        "bottom" or "b" => C.DataLabelPositionValues.Bottom,
-                                        "left" or "l" => C.DataLabelPositionValues.Left,
-                                        "right" or "r" => C.DataLabelPositionValues.Right,
-                                        "bestfit" => C.DataLabelPositionValues.BestFit,
-                                        _ => C.DataLabelPositionValues.OutsideEnd
-                                    };
-                                    dl.AppendChild(new C.DataLabelPosition { Val = dLblPos });
+                                    dl.AppendChild(new C.DataLabelPosition { Val = ParseDataLabelPosition(posVal) });
                                 }
                             }
                             else if (preservedDLblPos != null)
@@ -2737,7 +2728,9 @@ internal static partial class ChartHelper
                     var srVal = value.ToLowerInvariant() switch
                     {
                         "width" or "w" => C.SizeRepresentsValues.Width,
-                        _ => C.SizeRepresentsValues.Area
+                        "area" or "a" => C.SizeRepresentsValues.Area,
+                        _ => throw new ArgumentException(
+                            $"Unknown sizeRepresents value '{value}'. Valid: area, width.")
                     };
                     InsertBubbleChartChildInOrder(bubble, new C.SizeRepresents { Val = srVal });
                     break;
@@ -4585,18 +4578,7 @@ internal static partial class ChartHelper
             bool allowed = (isBarLike && barOk) || (isLineLike && lineOk);
             if (!allowed) continue;
 
-            var pos = lc switch
-            {
-                "center" or "ctr" => C.DataLabelPositionValues.Center,
-                "outsideend" or "outend" => C.DataLabelPositionValues.OutsideEnd,
-                "insideend" or "inend" => C.DataLabelPositionValues.InsideEnd,
-                "insidebase" or "inbase" or "base" => C.DataLabelPositionValues.InsideBase,
-                "top" or "t" => C.DataLabelPositionValues.Top,
-                "bottom" or "b" => C.DataLabelPositionValues.Bottom,
-                "left" or "l" => C.DataLabelPositionValues.Left,
-                "right" or "r" => C.DataLabelPositionValues.Right,
-                _ => C.DataLabelPositionValues.OutsideEnd,
-            };
+            var pos = ParseDataLabelPosition(lc);
 
             var dl = grp.GetFirstChild<C.DataLabels>();
             if (dl == null)

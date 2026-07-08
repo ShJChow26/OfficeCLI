@@ -17,10 +17,11 @@ public partial class ExcelHandler
 {
 
     // Map a table-column totals-row function token to its OOXML enum and the
-    // SUBTOTAL function code Excel uses. Unknown tokens fall back to SUM (109)
-    // — previously all non-"sum" tokens silently became SUM; this keeps the
-    // same fallback for unknown tokens but routes known ones to the right
-    // enum + SUBTOTAL code.
+    // SUBTOTAL function code Excel uses. Unknown tokens throw — the earlier
+    // SUM fallback silently changed the aggregation the user asked for
+    // (silent-accept enum-miss family). Every token the dump emitter can
+    // produce (TotalsRowFunction InnerText, lowercased) is enumerated below,
+    // so dump→batch replay never hits the throw.
     internal static (TotalsRowFunctionValues, int) MapTotalsRowFunction(string tok) => tok switch
     {
         "sum" => (TotalsRowFunctionValues.Sum, 109),
@@ -33,7 +34,8 @@ public partial class ExcelHandler
         "var" or "variance" => (TotalsRowFunctionValues.Variance, 110),
         "none" or "label" or "" => (TotalsRowFunctionValues.None, 0),
         "custom" => (TotalsRowFunctionValues.Custom, 109),
-        _ => (TotalsRowFunctionValues.Sum, 109)
+        _ => throw new ArgumentException(
+            $"Unknown totals-row function '{tok}'. Valid: sum, average, count, countNums, max, min, stdDev, var, none, custom.")
     };
 
     private string GetCellDisplayValue(Cell cell, Core.FormulaEvaluator? evaluator = null)
