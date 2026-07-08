@@ -1552,20 +1552,41 @@ public partial class WordHandler
     private void RenderFootnoteChildren(StringBuilder sb, OpenXmlElement note)
     {
         bool first = true;
+        // List items in a footnote/endnote previously rendered as bare <br>-
+        // separated text — every bullet/number marker was silently dropped
+        // while the body, table-cell and header/footer paths rendered them.
+        // Reuse the cell path's per-container list state: same container-
+        // matrix defect class as the header/footer list gap.
+        string? fnListTag = null;
+        var fnOlState = new OrderedListNumberingState();
+        void CloseFnList()
+        {
+            if (fnListTag != null) { sb.Append($"</{fnListTag}>"); fnListTag = null; }
+        }
         foreach (var child in note.ChildElements)
         {
             if (child is Paragraph p)
             {
+                var fnListStyle = GetParagraphListStyle(p);
+                if (fnListStyle != null)
+                {
+                    RenderCellListItem(sb, p, fnListStyle, ref fnListTag, fnOlState);
+                    first = false;
+                    continue;
+                }
+                CloseFnList();
                 if (!first) sb.Append("<br>");
                 RenderParagraphContentHtml(sb, p);
                 first = false;
             }
             else if (child is Table tbl)
             {
+                CloseFnList();
                 RenderTableHtml(sb, tbl);
                 first = false;
             }
         }
+        CloseFnList();
     }
 
     private void RenderEndnotesHtml(StringBuilder sb)
