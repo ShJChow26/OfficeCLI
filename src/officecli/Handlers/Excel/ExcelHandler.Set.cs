@@ -1788,6 +1788,19 @@ public partial class ExcelHandler
                     bool isWxH = fitParts.Length == 2
                         && uint.TryParse(fitParts[0], out fw)
                         && uint.TryParse(fitParts[1], out fh);
+                    // A value that LOOKS like the WxH form but fails to parse
+                    // must not fall through to the boolean parser — the
+                    // resulting "Invalid boolean value" message pointed users
+                    // at true/false instead of the actual format.
+                    if (!isWxH && fitParts.Length == 2)
+                        throw new ArgumentException(
+                            $"Invalid fitToPage value '{value}'. Expected WIDTHxHEIGHT with non-negative integers (e.g. 1x1, 2x0), or false/none to clear.");
+                    // ECMA-376 caps fitToWidth/fitToHeight at 32767; larger
+                    // values save fine and pass most validation but real Excel
+                    // refuses the file (0x800A03EC). Mirror the margin guard.
+                    if (isWxH && (fw > 32767 || fh > 32767))
+                        throw new ArgumentException(
+                            $"fitToPage value '{value}' is out of range: width and height must each be 0-32767 pages.");
                     bool clearing = !isWxH
                         && (string.IsNullOrEmpty(value)
                             || value.Equals("none", StringComparison.OrdinalIgnoreCase)

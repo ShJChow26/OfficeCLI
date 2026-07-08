@@ -227,6 +227,28 @@ public partial class ExcelHandler
                     Core.PivotTableHelper.ReadPivotTableProperties(pivotDef, ptNode, pivotParts[i]);
                 children.Add(ptNode);
             }
+
+            // Slicers are addressable (/Sheet1/slicer[N] get/set/remove all
+            // work) but were invisible in the parent sheet's child listing —
+            // the only sheet-level element missing from enumeration.
+            // CONSISTENCY(sheet-children): same pattern as pivottable above.
+            var slicersPart = worksheetPart.GetPartsOfType<SlicersPart>().FirstOrDefault();
+            var slicerElems = slicersPart?.Slicers?
+                .Elements<DocumentFormat.OpenXml.Office2010.Excel.Slicer>().ToList();
+            if (slicerElems != null)
+            {
+                for (int i = 0; i < slicerElems.Count; i++)
+                {
+                    var slNode = new DocumentNode
+                    {
+                        Path = $"/{sheetName}/slicer[{i + 1}]",
+                        Type = "slicer"
+                    };
+                    if (TryFindSlicerByIndex(worksheetPart, i + 1, out var slElem, out var slCache) && slElem != null)
+                        ReadSlicerProperties(slElem, slCache, slNode);
+                    children.Add(slNode);
+                }
+            }
         }
 
         return children;
