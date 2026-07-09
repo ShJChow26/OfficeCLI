@@ -497,7 +497,7 @@ public partial class ExcelHandler
         // but DO validate each token's A1 shape: an arbitrary string landed
         // verbatim in sqref= and real Excel refused the file (0x800A03EC)
         // while schema validation stayed green.
-        ValidateSqref(dvSqref, "validation ref");
+        dvSqref = ValidateSqref(dvSqref, "validation ref");
 
         var dv = new DataValidation
         {

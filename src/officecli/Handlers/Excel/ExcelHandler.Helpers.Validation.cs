@@ -70,7 +70,41 @@ public partial class ExcelHandler
                 }
             }
         }
-        return value;
+        // Canonicalize inverted tokens (F5:D3 → D3:F5, per axis) — merge
+        // rejects them and table normalizes them, but CF/DV wrote them
+        // verbatim, leaving a non-canonical sqref whose behavior in real
+        // Excel is undefined. Same convention as the drawing-anchor and
+        // table-range normalization.
+        var normTokens = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(tok =>
+            {
+                var cm = System.Text.RegularExpressions.Regex.Match(tok,
+                    @"^(\$?)([A-Z]+)(\$?)([0-9]+):(\$?)([A-Z]+)(\$?)([0-9]+)$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (cm.Success)
+                {
+                    var c1 = ColumnNameToIndex(cm.Groups[2].Value.ToUpperInvariant());
+                    var c2 = ColumnNameToIndex(cm.Groups[6].Value.ToUpperInvariant());
+                    var r1 = long.Parse(cm.Groups[4].Value);
+                    var r2 = long.Parse(cm.Groups[8].Value);
+                    var colA = c1 <= c2 ? cm.Groups[2].Value : cm.Groups[6].Value;
+                    var colB = c1 <= c2 ? cm.Groups[6].Value : cm.Groups[2].Value;
+                    var rowA = Math.Min(r1, r2);
+                    var rowB = Math.Max(r1, r2);
+                    return $"{colA}{rowA}:{colB}{rowB}";
+                }
+                var wm = System.Text.RegularExpressions.Regex.Match(tok,
+                    @"^\$?([A-Z]+)\$?:\$?([A-Z]+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (wm.Success
+                    && ColumnNameToIndex(wm.Groups[1].Value.ToUpperInvariant())
+                        > ColumnNameToIndex(wm.Groups[2].Value.ToUpperInvariant()))
+                    return $"{wm.Groups[2].Value}:{wm.Groups[1].Value}";
+                var rm = System.Text.RegularExpressions.Regex.Match(tok, @"^\$?([0-9]+)\$?:\$?([0-9]+)$");
+                if (rm.Success && long.Parse(rm.Groups[1].Value) > long.Parse(rm.Groups[2].Value))
+                    return $"{rm.Groups[2].Value}:{rm.Groups[1].Value}";
+                return tok;
+            });
+        return string.Join(" ", normTokens);
     }
 
     /// <summary>

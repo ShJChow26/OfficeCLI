@@ -165,9 +165,9 @@ public partial class ExcelHandler
                 // guard as Add — an unchecked A0 saved fine and real Excel
                 // refused the file (0x800A03EC).
                 case "sqref" or "ref":
-                    ValidateSqref(value, "validation ref");
+                    var dvNormRef = ValidateSqref(value, "validation ref");
                     dv.SequenceOfReferences = new ListValue<StringValue>(
-                        value.Split(' ').Select(s => new StringValue(s)));
+                        dvNormRef.Split(' ').Select(s => new StringValue(s)));
                     break;
                 case "type":
                     dv.Type = value.ToLowerInvariant() switch
