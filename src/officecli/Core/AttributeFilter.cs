@@ -1115,29 +1115,13 @@ internal static class AttributeFilter
         return Regex.IsMatch(s, @"^(?:row|col|column)\[", RegexOptions.IgnoreCase);
     }
 
-    // Split a selector on commas at bracket depth 0 (outside quotes).
+    // Split a selector on top-level commas. Single scanner implementation
+    // lives in SelectorCommaSplit (shared with the PowerPoint handler-level
+    // union) — quote-aware AND paren-aware, so a comma inside `:contains(a,b)`
+    // or a quoted value never splits. This wrapper only drops empty segments.
     private static List<string> SplitTopLevelCommas(string selector)
-    {
-        var parts = new List<string>();
-        int depth = 0, start = 0;
-        bool inQuote = false;
-        char quoteChar = '"';
-        for (int i = 0; i < selector.Length; i++)
-        {
-            var c = selector[i];
-            if (inQuote) { if (c == quoteChar) inQuote = false; continue; }
-            if (c is '"' or '\'') { inQuote = true; quoteChar = c; continue; }
-            if (c == '[') depth++;
-            else if (c == ']') depth = Math.Max(0, depth - 1);
-            else if (c == ',' && depth == 0)
-            {
-                parts.Add(selector[start..i]);
-                start = i + 1;
-            }
-        }
-        parts.Add(selector[start..]);
-        return parts.Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
-    }
+        => SelectorCommaSplit.SplitTopLevelCommas(selector)
+            .Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
 
     /// <summary>Wrap a flat condition list as an expression (single predicate or AND).</summary>
     public static FilterExpr FromConditions(IReadOnlyList<Condition> conds)
