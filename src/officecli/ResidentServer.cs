@@ -1912,7 +1912,12 @@ public class ResidentServer : IDisposable
 
     private void ExecuteQuery(ResidentRequest req, OutputFormat format)
     {
-        var selector = req.GetArg("selector", "");
+        // `path` aliases `selector` (batch items routed here carry whichever
+        // field the caller wrote); an empty selector would silently match
+        // every node — mirror CommandBuilder's batch-query guard.
+        var selector = req.GetArgOrNull("selector") ?? req.GetArgOrNull("path") ?? "";
+        if (string.IsNullOrEmpty(selector))
+            throw new ArgumentException("'query' requires a selector. Example: {\"command\": \"query\", \"selector\": \"row[Score>80]\"}");
         // CONSISTENCY(cell-selector-alias): mirror the direct-mode normalization +
         // boolean engine in CommandBuilder.GetQuery.cs — without alias normalization,
         // resident-mode Excel cell queries with short aliases (bold, size, ...)
