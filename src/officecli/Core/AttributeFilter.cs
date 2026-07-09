@@ -275,7 +275,7 @@ internal static class AttributeFilter
         return (results, warnings);
     }
 
-    private static string OpToString(FilterOp op) => op switch
+    internal static string OpToString(FilterOp op) => op switch
     {
         FilterOp.Equal => "=",
         FilterOp.NotEqual => "!=",

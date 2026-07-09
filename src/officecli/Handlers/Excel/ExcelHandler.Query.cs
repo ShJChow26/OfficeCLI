@@ -1230,6 +1230,32 @@ public partial class ExcelHandler
             n.Path.EndsWith($"[{wanted}]", StringComparison.OrdinalIgnoreCase)).ToList();
     }
 
+    // True when an `=` (equality predicate) sits outside every bracket and quote
+    // — i.e. a predicate was written without its brackets (`Dept=IT`,
+    // `col.部门=销售`). Only `=` is checked: `>` / `<` double as the descendant
+    // combinator (`row > cell`, `table > row`), so flagging them would break
+    // those selectors; the bare-`>` predicate case is instead steered by the
+    // ambiguity/collision errors, which now spell out the bracketed form. `=` is
+    // never a combinator, so a top-level `=` is unambiguously a missing-brackets
+    // predicate — fail loud instead of returning a silent empty set (exit 0).
+    private static bool HasTopLevelComparison(string selector)
+    {
+        int bracket = 0, paren = 0;
+        char? quote = null;
+        foreach (var c in selector)
+        {
+            if (quote.HasValue) { if (c == quote.Value) quote = null; continue; }
+            if (c == '"' || c == '\'') { quote = c; continue; }
+            else if (c == '[') bracket++;
+            else if (c == ']') bracket = System.Math.Max(0, bracket - 1);
+            else if (c == '(') paren++;
+            else if (c == ')') paren = System.Math.Max(0, paren - 1);
+            else if (bracket == 0 && paren == 0 && c == '=')
+                return true;
+        }
+        return false;
+    }
+
     private List<DocumentNode> QueryDispatch(string selector)
     {
         var results = new List<DocumentNode>();
@@ -1246,6 +1272,17 @@ public partial class ExcelHandler
                 return node.Children;
             return [node];
         }
+
+        // A comparison operator OUTSIDE any bracket means the predicate was
+        // written without its brackets (`col.2024>150`, `foo>1`, `Dept=IT`).
+        // Such a selector matches no element type and would otherwise return an
+        // empty list with exit 0 — a silent "no rows" that a data user reads as a
+        // real result. Fail loud with the bracketed form instead.
+        if (HasTopLevelComparison(selector))
+            throw new Core.CliException(
+                $"'{selector}' is not a valid selector: a predicate must be inside brackets, " +
+                $"e.g. row[col.2024>150] to filter table rows by a column, or cell[value>150] to filter cells.")
+                { Code = "invalid_selector" };
 
         // CONSISTENCY(excel-sheet-separator-warn): Detect the PPT-style `>`
         // separator form (e.g. `Sheet1>ole`) that users familiar with the
@@ -1770,10 +1807,13 @@ public partial class ExcelHandler
                 {
                     bool forcedCol = Regex.IsMatch(lc.Key, @"^col(?:umn)?\.", RegexOptions.IgnoreCase);
                     if (!forcedCol && int.TryParse(lc.Key, out _))
+                    {
+                        var full = $"row[col.{lc.Key}{AttributeFilter.OpToString(lc.Op)}{lc.Value}]";
                         throw new Core.CliException(
                             $"row[{lc.Key} …] is ambiguous: a bare number is the row index, not a column filter. " +
-                            $"Use 'col.{lc.Key}' to filter a column named '{lc.Key}', or 'row[{lc.Key}]' (no operator) for that row.")
+                            $"Use '{full}' to filter by a column named '{lc.Key}', or 'row[{lc.Key}]' (no operator) for that row.")
                             { Code = "invalid_selector" };
+                    }
                     if (!forcedCol && (atForced.Contains(lc.Key) || RowAttributeKeys.Contains(lc.Key)))
                     {
                         attrCount++;
@@ -1787,7 +1827,7 @@ public partial class ExcelHandler
                     if (RowKeyCollidesWithColumn(ak, parsed.Sheet))
                         throw new Core.CliException(
                             $"row[{ak} …] is ambiguous: '{ak}' names both a row property and a table column. " +
-                            $"Use 'col.{ak}' to match the column, or '@{ak}' to match the row property.")
+                            $"Use 'row[col.{ak} …]' to match the column, or 'row[@{ak} …]' to match the row property.")
                             { Code = "invalid_selector" };
                 if (colCount > 0 && attrCount > 0)
                     throw new Core.CliException(
