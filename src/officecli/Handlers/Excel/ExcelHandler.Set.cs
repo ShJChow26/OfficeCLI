@@ -402,6 +402,20 @@ public partial class ExcelHandler
         var styleProps = new Dictionary<string, string>();
         var unsupported = new List<string>();
 
+        // clear=true must run BEFORE value/formula/type in this same Set call —
+        // otherwise dictionary iteration order decides the outcome and
+        // `--prop value=99 --prop clear=true` silently wiped the new value
+        // (the schema documents clear as "erase old content, THEN apply new").
+        // Do it as a pre-pass; the in-loop `case "clear"` is now a consumed
+        // no-op so it can't re-clear after the value lands.
+        if (properties.TryGetValue("clear", out var clearVal) && IsTruthy(clearVal))
+        {
+            cell.CellValue = null;
+            cell.CellFormula = null;
+            cell.RemoveAllChildren<InlineString>();
+            cell.DataType = null;
+        }
+
         foreach (var (key, value) in properties)
         {
             if (value is null) continue;
@@ -704,14 +718,9 @@ public partial class ExcelHandler
                         styleProps["numberformat"] = "m/d/yy";
                     break;
                 case "clear":
-                    // Per schemas/help/xlsx/cell.json: clear erases value/formula
-                    // before applying new content. StyleIndex (font/alignment/
-                    // border/numfmt) is independent state and must survive clear,
-                    // matching `set`'s overall merge semantics.
-                    cell.CellValue = null;
-                    cell.CellFormula = null;
-                    cell.RemoveAllChildren<InlineString>();
-                    cell.DataType = null;
+                    // Handled by the pre-pass above (runs before value/formula
+                    // regardless of --prop order). No-op here so it stays a
+                    // consumed key and never re-clears an applied value.
                     break;
                 case "arrayformula":
                 {
