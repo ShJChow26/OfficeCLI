@@ -251,24 +251,30 @@ public partial class ExcelHandler
             }
         }
 
-        // 6c. chart series references (<c:f> in each ChartPart under DrawingsPart),
-        // e.g. Sheet1!$B$1:$B$5. Route through formulaTextMapper so refs targeting
-        // this sheet follow the displacement and refs to other sheets are left
-        // alone (the shifter's sheet-scope guard handles that).
-        if (formulaTextMapper != null && worksheet.DrawingsPart != null)
+        // 6c. chart series references (<c:f> in each ChartPart), e.g.
+        // Sheet1!$B$1:$B$5. A chart on ANY sheet can reference the edited sheet
+        // (a dashboard chart sourced from a data sheet is the common case), so
+        // walk every worksheet's DrawingsPart — not just the edited sheet's.
+        // The mapper's sheet-scope guard leaves refs to other sheets untouched,
+        // so this only shifts the refs that actually target the edited sheet.
+        if (formulaTextMapper != null)
         {
-            foreach (var chartPart in worksheet.DrawingsPart.ChartParts)
+            foreach (var (_, wsPart) in GetWorksheets())
             {
-                var cs = chartPart.ChartSpace;
-                if (cs == null) continue;
-                bool chDirty = false;
-                foreach (var f in cs.Descendants<C.Formula>())
+                if (wsPart.DrawingsPart == null) continue;
+                foreach (var chartPart in wsPart.DrawingsPart.ChartParts)
                 {
-                    if (string.IsNullOrEmpty(f.Text)) continue;
-                    var nf = formulaTextMapper(f.Text);
-                    if (!string.Equals(nf, f.Text, StringComparison.Ordinal)) { f.Text = nf; chDirty = true; }
+                    var cs = chartPart.ChartSpace;
+                    if (cs == null) continue;
+                    bool chDirty = false;
+                    foreach (var f in cs.Descendants<C.Formula>())
+                    {
+                        if (string.IsNullOrEmpty(f.Text)) continue;
+                        var nf = formulaTextMapper(f.Text);
+                        if (!string.Equals(nf, f.Text, StringComparison.Ordinal)) { f.Text = nf; chDirty = true; }
+                    }
+                    if (chDirty) cs.Save();
                 }
-                if (chDirty) cs.Save();
             }
         }
 
