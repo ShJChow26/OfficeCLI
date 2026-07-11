@@ -691,6 +691,23 @@ public partial class ExcelHandler
                             $"Cannot store '{cell.CellValue?.Text}' as boolean; value must be true/false, yes/no, or 1/0. " +
                             "Use type=string to keep the literal text.");
                 }
+                // A type=number cell stores its value in <v> with no t=
+                // attribute, so a non-numeric value produces spec-invalid
+                // numeric content (<v>notanumber</v>) that makes real Excel
+                // refuse the whole file (0x800A03EC) while schema validation
+                // stays green. Reject up front, mirroring the boolean/date
+                // guards above.
+                if (cellType.ToLowerInvariant() is "number" or "num")
+                {
+                    var numText = cell.CellValue?.Text?.Trim();
+                    if (!string.IsNullOrEmpty(numText)
+                        && (!double.TryParse(numText, System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture, out var numDbl)
+                            || !double.IsFinite(numDbl)))
+                        throw new ArgumentException(
+                            $"Cannot store '{cell.CellValue?.Text}' as number; value must be a finite numeric literal. " +
+                            "Use type=string to keep the literal text.");
+                }
                 // CONSISTENCY(cell-type-parity): mirror Set's value auto-detect
                 // path (ExcelHandler.Set.cs lines 1025-1033) — parse the cell
                 // value as an ISO date and write it back as an OADate double so
