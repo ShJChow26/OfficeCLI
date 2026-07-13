@@ -2620,9 +2620,10 @@ internal class WatchServer : IDisposable
             // Target already held by ANOTHER live watch → 409 with its port so
             // the caller can reuse that server. Same single-consumer constraint
             // as the startup duplicate check in RunAsync: the per-file update
-            // pipe cannot have two listeners.
-            var samePipe = GetWatchPipeName(newPath) == _pipeName;
-            if (!samePipe)
+            // pipe cannot have two listeners. This is a pre-render fast-fail
+            // only — the render below takes seconds, so the swap re-derives
+            // pipe identity under _switchLock instead of trusting this value.
+            if (GetWatchPipeName(newPath) != _pipeName)
             {
                 var occupied = GetExistingWatchPort(newPath);
                 if (occupied.HasValue)
@@ -2706,12 +2707,22 @@ internal class WatchServer : IDisposable
             await _switchLock.WaitAsync(token);
             try
             {
+                // Re-derive pipe identity NOW, under the lock. The pre-render
+                // check ran seconds ago; a concurrent switch may have
+                // retargeted this server since. Acting on a stale latch split
+                // identity from content: a same-file force-refresh that lost
+                // the race skipped the _filePath/_pipeName update (gated) yet
+                // still overwrote _currentHtml (unconditional), leaving status
+                // reporting one document while GET / served another until the
+                // next switch.
                 var oldPipeName = _pipeName;
-                if (!samePipe)
+                var newPipeName = GetWatchPipeName(newPath);
+                var pipeChanged = newPipeName != oldPipeName;
+                if (pipeChanged)
                 {
                     DeleteMarker(); // old file's marker — call before _filePath changes
                     _filePath = newPath;
-                    _pipeName = GetWatchPipeName(newPath);
+                    _pipeName = newPipeName;
                     // Kick the pipe listener out of WaitForConnectionAsync on the
                     // old name so its next iteration listens on the new one
                     // (same dummy-connect trick as StopAsync — cancellation alone
@@ -2734,6 +2745,14 @@ internal class WatchServer : IDisposable
                         catch { }
                     }
                     WriteMarker(); // new file's marker
+                }
+                else
+                {
+                    // Same pipe — still track the requested path verbatim.
+                    // Pipe names case-fold the path on Windows/macOS, so equal
+                    // names don't guarantee equal strings, and identity must
+                    // always match the content installed below.
+                    _filePath = newPath;
                 }
 
                 // Marks/selection are per-document positional state — never
